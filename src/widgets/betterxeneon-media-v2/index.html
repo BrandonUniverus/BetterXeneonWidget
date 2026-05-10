@@ -66,7 +66,13 @@
 
     /* Content column on the right in wide mode, full width in vertical.
        flex:1 1 0 lets the lyrics inside it actually take available space
-       in wide mode without overflowing. */
+       in wide mode without overflowing.
+       justify-content: flex-start anchors title/artist/source at the top.
+       The bottom group (.progress + .transport + .phase) is pushed to the
+       bottom by margin-top: auto on .progress. When lyrics ARE rendered,
+       they fill the gap as flex:1; when they're not, .progress's auto
+       margin still keeps the bottom row pinned down rather than letting
+       everything collapse to the middle. */
     .content {
       flex: 1 1 0;
       min-width: 0;
@@ -75,7 +81,7 @@
       flex-direction: column;
       gap: 6px;
       align-self: stretch;
-      justify-content: center;
+      justify-content: flex-start;
     }
     .root.size-vertical .content {
       align-items: center;
@@ -199,7 +205,13 @@
     }
     .lyrics-fallback.hidden { display: none; }
 
-    /* Progress bar */
+    /* Progress bar — first element of the "bottom group". margin-top: auto
+       eats whatever vertical slack is left in .content, pushing this and
+       everything below it (.transport, .phase) to the bottom of the column.
+       When lyrics ARE rendered as flex:1, the lyrics take the slack first
+       and this margin contributes nothing. When lyrics are absent, the
+       margin keeps progress + transport + status pinned to the bottom
+       instead of collapsing toward the middle. */
     .progress {
       width: 100%;
       max-width: 100%;
@@ -208,6 +220,7 @@
       align-items: stretch;
       gap: 4px;
       flex: 0 0 auto;
+      margin-top: auto;
     }
     .progress .track {
       height: 4px;
