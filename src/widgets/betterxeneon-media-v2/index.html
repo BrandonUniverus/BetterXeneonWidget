@@ -64,10 +64,29 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    /* "Up next" line — shows the head of the Spotify queue when authed.
+       visibility:hidden when nothing to show so layout doesn't shift. */
+    .upnext {
+      font-size: 11px;
+      font-weight: 500;
+      opacity: 0.55;
+      letter-spacing: 0.04em;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-height: 14px;  /* reserve the row even when empty */
+    }
+    .upnext.empty { visibility: hidden; }
+    .upnext .label {
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      margin-right: 6px;
+      color: #1db954;
+    }
 
-    /* Progress bar — track is fixed, fill scales horizontally via transform.
-       Using scaleX (not width) so the update is composite-only: no layout,
-       no paint of the track, just GPU re-rasterization of the fill layer. */
+    /* Progress bar */
     .progress {
       width: min(60vmin, 320px);
       max-width: 90%;
@@ -100,7 +119,6 @@
       letter-spacing: 0.02em;
     }
 
-    /* Transport row */
     .transport {
       display: flex;
       gap: 12px;
@@ -144,6 +162,19 @@
       opacity: 0.45;
       text-transform: uppercase;
     }
+    .badge {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: #1db954;
+      color: #08130c;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: none;
+      visibility: hidden;
+    }
+    .badge.live { visibility: visible; }
     .pulse {
       display: inline-block;
       width: 6px;
@@ -166,6 +197,7 @@
       <div class="title" id="title">Connecting…</div>
       <div class="artist" id="artist"></div>
     </div>
+    <div class="upnext empty" id="upnext"><span class="label">Up next</span><span id="upnextText"></span></div>
     <div class="progress">
       <div class="track"><div class="fill" id="fill"></div></div>
       <div class="times"><span id="curTime">0:00</span><span id="totTime">0:00</span></div>
@@ -187,29 +219,33 @@
         </svg>
       </button>
     </div>
-    <div class="phase"><span class="pulse" id="pulse"></span><span id="status">media v2 · phase 4</span></div>
+    <div class="phase">
+      <span class="pulse" id="pulse"></span><span id="status">media v2 · phase 5</span><span class="badge" id="spotifyBadge">spotify</span>
+    </div>
   </div>
 
   <script type="module">
-    // Phase 4 goal: introduce the 200ms tick cadence that drives a smooth
-    // progress bar. Server polls (1.5s) anchor the playback position;
-    // local 200ms ticks extrapolate forward. The bar update path is
-    // deliberately compositor-only (transform: scaleX) so even at 5 Hz
-    // it shouldn't cost layout work. Time labels update via textContent
-    // every tick, but only when the displayed minute:second value changed.
+    // Phase 5 goal: layer in the Spotify polling path. Every 1.5s we now
+    // fetch /api/spotify/status alongside SMTC; if authed, we also fetch
+    // /api/spotify/playback. Queue is fetched on a slower 6s timer because
+    // it doesn't change as often and a fetch round-trip per second was
+    // overkill in the original widget.
+    //
+    // We're testing whether the SECOND fetch path causes flicker even
+    // though Phases 1-4 (single fetch path) didn't.
 
     const HOST = 'http://127.0.0.1:8976';
     const POLL_MS = 1500;
     const TICK_MS = 200;
-    // If the server estimate diverges from local extrapolation by more
-    // than this, treat it as a seek and hard re-anchor. Otherwise we
-    // ignore minor drift to keep the bar moving smoothly.
+    const QUEUE_MS = 6000;
     const SEEK_THRESHOLD_FORWARD = 2500;
     const SEEK_THRESHOLD_BACKWARD = 2000;
 
     const artEl = document.getElementById('art');
     const titleEl = document.getElementById('title');
     const artistEl = document.getElementById('artist');
+    const upnextEl = document.getElementById('upnext');
+    const upnextTextEl = document.getElementById('upnextText');
     const prevBtn = document.getElementById('prevBtn');
     const toggleBtn = document.getElementById('toggleBtn');
     const nextBtn = document.getElementById('nextBtn');
@@ -219,6 +255,7 @@
     const totTimeEl = document.getElementById('totTime');
     const pulseEl = document.getElementById('pulse');
     const statusEl = document.getElementById('status');
+    const spotifyBadge = document.getElementById('spotifyBadge');
 
     const PLAY_PATH = 'M7 5l13 7-13 7z';
     const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
@@ -234,15 +271,16 @@
     let lastCurTime = null;
     let lastTotTime = null;
     let lastFillRatio = -1;
+    let lastSpotifyAuthed = null;
+    let lastUpnext = null;
     let pulseTimeout = null;
 
-    // Position state. anchorPosMs/anchorAt re-set on each poll (or on
-    // detected seek). Track key changes also re-anchor.
     let anchorPosMs = 0;
     let anchorAt = 0;
     let durationMs = 0;
     let isPlaying = false;
     let lastTrackKey = '';
+    let spotifyAuthed = false;
 
     const inFlight = { prev: false, toggle: false, next: false };
 
@@ -278,6 +316,25 @@
       return enabled;
     }
 
+    function setSpotifyAuthed(authed) {
+      if (authed !== lastSpotifyAuthed) {
+        spotifyBadge.classList.toggle('live', authed);
+        lastSpotifyAuthed = authed;
+      }
+    }
+
+    function setUpnext(text) {
+      // text === '' means "no next track to show" — hide the row.
+      if (text === lastUpnext) return;
+      lastUpnext = text;
+      if (text) {
+        upnextTextEl.textContent = text;
+        upnextEl.classList.remove('empty');
+      } else {
+        upnextEl.classList.add('empty');
+      }
+    }
+
     function flashPulse() {
       pulseEl.classList.add('live');
       if (pulseTimeout) clearTimeout(pulseTimeout);
@@ -305,7 +362,6 @@
     }
 
     function currentPosition() {
-      // Local extrapolation from anchor. Pause = freeze at anchor value.
       if (anchorAt === 0) return 0;
       const elapsed = isPlaying ? Math.max(0, performance.now() - anchorAt) : 0;
       const pos = anchorPosMs + elapsed;
@@ -314,16 +370,12 @@
 
     function tick() {
       const pos = currentPosition();
-      // Bar fill — only update if the visible ratio changed by more than
-      // 1/1000 (i.e. ~1 device pixel on a 1000px-wide bar). Avoids style
-      // recalc thrash from sub-pixel jitter.
       const ratio = durationMs > 0 ? pos / durationMs : 0;
       const clamped = Math.max(0, Math.min(1, ratio));
       if (Math.abs(clamped - lastFillRatio) > 0.001) {
         fillEl.style.transform = 'scaleX(' + clamped.toFixed(4) + ')';
         lastFillRatio = clamped;
       }
-      // Time labels — only touch DOM when the displayed M:SS actually changed.
       const cur = fmtTime(pos);
       const tot = fmtTime(durationMs);
       if (cur !== lastCurTime) { setText(curTimeEl, cur); lastCurTime = cur; }
@@ -332,9 +384,30 @@
 
     async function pollOnce() {
       try {
-        const res = await fetch(HOST + '/api/media/now-playing');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const np = await res.json();
+        // SMTC + Spotify status fetched in parallel. Status is a tiny JSON
+        // (just `{connected, displayName}`) so it's cheap.
+        const [npRes, ssRes] = await Promise.all([
+          fetch(HOST + '/api/media/now-playing'),
+          fetch(HOST + '/api/spotify/status'),
+        ]);
+        if (!npRes.ok) throw new Error('now-playing HTTP ' + npRes.status);
+        if (!ssRes.ok) throw new Error('spotify/status HTTP ' + ssRes.status);
+        const np = await npRes.json();
+        const ss = await ssRes.json();
+
+        spotifyAuthed = !!ss.connected;
+        setSpotifyAuthed(spotifyAuthed);
+
+        // Spotify Web API playback state (cross-device control + extra
+        // metadata). Only fetched when authed — saves a round-trip and
+        // avoids the host returning EmptyPlayback every 1.5s.
+        let spotifyPlayback = null;
+        if (spotifyAuthed) {
+          try {
+            const pbRes = await fetch(HOST + '/api/spotify/playback');
+            if (pbRes.ok) spotifyPlayback = await pbRes.json();
+          } catch { /* non-fatal — SMTC still drives the main view */ }
+        }
 
         const title = np.hasSession ? (np.title || 'Unknown title') : 'Nothing playing';
         const artist = np.hasSession ? (np.artist || '') : '';
@@ -349,14 +422,10 @@
         lastCanPrev = setBtnEnabled(prevBtn, !!np.canGoPrevious, lastCanPrev);
         lastCanNext = setBtnEnabled(nextBtn, !!np.canGoNext, lastCanNext);
 
-        // Position handling — anchor on track change, on first poll, or on
-        // detected seek (delta past threshold). Otherwise let local extrap
-        // continue smoothly.
         const serverPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
         durationMs = typeof np.durationMs === 'number' ? np.durationMs : 0;
         const trackKey = (np.title || '') + '|' + (np.artist || '');
         const now = performance.now();
-
         if (anchorAt === 0 || trackKey !== lastTrackKey) {
           anchorPosMs = serverPos;
           anchorAt = now;
@@ -370,13 +439,35 @@
           }
         }
 
+        // Mark spotifyPlayback as available so future phases (when we wire
+        // up cross-device control) can prefer it. For phase 5 we only use
+        // it implicitly via the queue fetch behavior.
+        void spotifyPlayback;
+
         statusEl.classList.remove('err');
-        statusEl.textContent = 'media v2 · phase 4';
+        statusEl.textContent = 'media v2 · phase 5';
         flashPulse();
       } catch (e) {
         statusEl.classList.add('err');
         statusEl.textContent = 'host offline · ' + (e.message || 'unknown error');
       }
+    }
+
+    async function pollQueue() {
+      // Slower cadence than the main poll. Spotify rate-limits hard, and
+      // the host caches anyway — but we still don't want to hammer.
+      if (!spotifyAuthed) { setUpnext(''); return; }
+      try {
+        const res = await fetch(HOST + '/api/spotify/queue');
+        if (!res.ok) return;
+        const queue = await res.json();
+        if (Array.isArray(queue) && queue.length > 0) {
+          const t = queue[0];
+          setUpnext((t.title || '') + (t.artist ? ' — ' + t.artist : ''));
+        } else {
+          setUpnext('');
+        }
+      } catch { /* non-fatal */ }
     }
 
     artEl.addEventListener('error', () => {
@@ -385,8 +476,10 @@
     });
 
     pollOnce();
+    pollQueue();
     setInterval(pollOnce, POLL_MS);
     setInterval(tick, TICK_MS);
+    setInterval(pollQueue, QUEUE_MS);
   </script>
 </body>
 </html>
