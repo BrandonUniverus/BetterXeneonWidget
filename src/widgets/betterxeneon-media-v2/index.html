@@ -29,16 +29,14 @@
       box-sizing: border-box;
       text-align: center;
     }
-    /* Square art, capped so it leaves room for title/artist text on small
-       cells. min-height 0 lets flex shrink it on portrait/short cells. */
     .art {
-      width: min(40vmin, 200px);
+      width: min(36vmin, 180px);
       aspect-ratio: 1 / 1;
       flex: 0 1 auto;
       min-height: 0;
       border-radius: 10px;
       object-fit: cover;
-      background: #1c1c22;   /* placeholder while no art */
+      background: #1c1c22;
       display: block;
     }
     .art.empty { visibility: hidden; }
@@ -67,8 +65,46 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+
+    /* Transport row */
+    .transport {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .t-btn {
+      width: clamp(44px, 8vmin, 64px);
+      height: clamp(44px, 8vmin, 64px);
+      border-radius: 50%;
+      border: none;
+      background: #1c1c22;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 80ms;
+    }
+    .t-btn:hover { background: #2a2a32; }
+    .t-btn:active { background: #2a2a32; }
+    .t-btn:disabled { opacity: 0.3; cursor: default; }
+    .t-btn svg {
+      width: 42%;
+      height: 42%;
+      pointer-events: none; /* SVG children would otherwise eat clicks */
+      fill: currentColor;
+    }
+    .t-btn.center {
+      background: #1db954;
+      color: #08130c;
+    }
+    .t-btn.center:hover, .t-btn.center:active { background: #1ed760; }
+
     .phase {
-      margin-top: 8px;
+      margin-top: 4px;
       font-size: 11px;
       letter-spacing: 0.08em;
       opacity: 0.45;
@@ -96,15 +132,32 @@
       <div class="title" id="title">Connecting…</div>
       <div class="artist" id="artist"></div>
     </div>
-    <div class="phase"><span class="pulse" id="pulse"></span><span id="status">media v2 · phase 2</span></div>
+    <div class="transport">
+      <button class="t-btn" id="prevBtn" type="button" aria-label="Previous track" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 5h2v14H6zM10 12l9-7v14z"/>
+        </svg>
+      </button>
+      <button class="t-btn center" id="toggleBtn" type="button" aria-label="Play" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true" id="toggleIcon">
+          <path d="M7 5l13 7-13 7z"/>
+        </svg>
+      </button>
+      <button class="t-btn" id="nextBtn" type="button" aria-label="Next track" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 5l9 7-9 7zM16 5h2v14h-2z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="phase"><span class="pulse" id="pulse"></span><span id="status">media v2 · phase 3</span></div>
   </div>
 
   <script type="module">
-    // Phase 2 goal: introduce the <img> element + album-art swap on track
-    // change. We only update the src when the host's artVersion changes,
-    // not on every poll — otherwise the browser would re-decode the same
-    // bytes 40 times a minute. The version number doubles as the cache
-    // buster so the host can serve a new image under the same URL path.
+    // Phase 3 goal: add transport interactivity. Three buttons that POST
+    // to the host. State (icon + disabled) reflects what SMTC says is
+    // available. In-flight guards prevent rapid tap-spam from queueing
+    // multiple POSTs (a real concern on touchscreens — iCUE's QtWebEngine
+    // sometimes delivers a slightly-held tap as several click events).
 
     const HOST = 'http://127.0.0.1:8976';
     const POLL_MS = 1500;
@@ -112,23 +165,37 @@
     const artEl = document.getElementById('art');
     const titleEl = document.getElementById('title');
     const artistEl = document.getElementById('artist');
+    const prevBtn = document.getElementById('prevBtn');
+    const toggleBtn = document.getElementById('toggleBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const toggleIcon = document.getElementById('toggleIcon');
     const pulseEl = document.getElementById('pulse');
     const statusEl = document.getElementById('status');
+
+    // SVG path data for the play vs pause states. Swapped via setAttribute
+    // on the existing <path> child rather than replacing the whole <svg>,
+    // since path-d swaps don't trigger a layer rebuild on most engines.
+    const PLAY_PATH = 'M7 5l13 7-13 7z';
+    const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
 
     let lastTitle = null;
     let lastArtist = null;
     let lastArtVersion = -1;
     let lastHasArt = null;
+    let lastIsPlaying = null;
+    let lastCanPrev = null;
+    let lastCanNext = null;
+    let lastCanToggle = null;
     let pulseTimeout = null;
+
+    // In-flight guards (one per button so a slow Next doesn't block Play).
+    const inFlight = { prev: false, toggle: false, next: false };
 
     function setText(el, value) {
       if (el.textContent !== value) el.textContent = value;
     }
 
     function setArt(hasArt, version) {
-      // Only touch the <img> when something *meaningful* changed. Re-setting
-      // the same .src forces a re-decode in some browsers; flipping the same
-      // class is wasted style work.
       if (hasArt && version !== lastArtVersion) {
         artEl.src = HOST + '/api/media/album-art?v=' + version;
         lastArtVersion = version;
@@ -139,11 +206,43 @@
       }
     }
 
+    function setToggleState(isPlaying, canToggle) {
+      if (isPlaying !== lastIsPlaying) {
+        toggleIcon.firstElementChild.setAttribute('d', isPlaying ? PAUSE_PATH : PLAY_PATH);
+        toggleBtn.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
+        lastIsPlaying = isPlaying;
+      }
+      if (canToggle !== lastCanToggle) {
+        toggleBtn.disabled = !canToggle;
+        lastCanToggle = canToggle;
+      }
+    }
+
+    function setBtnEnabled(btn, enabled, lastVar) {
+      // Returns the new "last" value so the caller can store it. Avoids
+      // touching .disabled when the value didn't change.
+      if (enabled !== lastVar) btn.disabled = !enabled;
+      return enabled;
+    }
+
     function flashPulse() {
       pulseEl.classList.add('live');
       if (pulseTimeout) clearTimeout(pulseTimeout);
       pulseTimeout = setTimeout(() => pulseEl.classList.remove('live'), 250);
     }
+
+    async function postAction(path, key) {
+      if (inFlight[key]) return;
+      inFlight[key] = true;
+      try {
+        await fetch(HOST + path, { method: 'POST' });
+      } catch { /* surfaced by next poll's status */ }
+      finally { inFlight[key] = false; }
+    }
+
+    prevBtn.addEventListener('click', () => postAction('/api/media/previous', 'prev'));
+    toggleBtn.addEventListener('click', () => postAction('/api/media/toggle', 'toggle'));
+    nextBtn.addEventListener('click', () => postAction('/api/media/next', 'next'));
 
     async function pollOnce() {
       try {
@@ -155,8 +254,15 @@
         if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
         if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
         setArt(!!np.hasArt && !!np.hasSession, np.artVersion ?? 0);
+
+        const isPlaying = np.status === 'Playing';
+        const canToggle = !!(np.canPlay || np.canPause);
+        setToggleState(isPlaying, canToggle);
+        lastCanPrev = setBtnEnabled(prevBtn, !!np.canGoPrevious, lastCanPrev);
+        lastCanNext = setBtnEnabled(nextBtn, !!np.canGoNext, lastCanNext);
+
         statusEl.classList.remove('err');
-        statusEl.textContent = 'media v2 · phase 2';
+        statusEl.textContent = 'media v2 · phase 3';
         flashPulse();
       } catch (e) {
         statusEl.classList.add('err');
@@ -164,8 +270,6 @@
       }
     }
 
-    // Hide the <img> if the URL it eventually loads turns out to be a 404
-    // or unreachable. Without this you'd see a broken-image icon flash.
     artEl.addEventListener('error', () => {
       artEl.classList.add('empty');
       lastHasArt = false;
