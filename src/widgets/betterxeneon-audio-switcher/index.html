@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>tr('Better Audio Switcher')</title>
+    <link rel="icon" type="image/svg+xml" href="resources/icon.svg">
+
+    <meta name="x-icue-property" content="pollIntervalMs"
+          data-label="tr('Polling Interval (ms)')"
+          data-type="slider"
+          data-default="1500"
+          data-min="500"
+          data-max="5000"
+          data-step="100">
+
+    <meta name="x-icue-property" content="useSystemAccent"
+          data-label="tr('Use Windows Accent Color')"
+          data-type="switch"
+          data-default="true">
+
+    <meta name="x-icue-property" content="textColor"
+          data-label="tr('Text Color')"
+          data-type="color"
+          data-default="'#ffffff'">
+
+    <meta name="x-icue-property" content="accentColor"
+          data-label="tr('Custom Accent Color')"
+          data-type="color"
+          data-default="'#0078d4'">
+
+    <meta name="x-icue-property" content="backgroundColor"
+          data-label="tr('Background Color')"
+          data-type="color"
+          data-default="'#0a0a0c'">
+
+    <meta name="x-icue-property" content="transparency"
+          data-label="tr('Background Transparency')"
+          data-type="slider"
+          data-default="0"
+          data-min="0"
+          data-max="100"
+          data-step="1">
+
+    <script id="x-icue-groups" type="application/json">
+      [
+        { "title": "tr('Behavior')", "properties": ["pollIntervalMs"] },
+        { "title": "tr('Appearance')", "properties": ["useSystemAccent", "textColor", "accentColor", "backgroundColor", "transparency"] }
+      ]
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>tr('Better Media')</title>
+    <link rel="icon" type="image/svg+xml" href="resources/icon.svg">
+
+    <meta name="x-icue-property" content="pollIntervalMs"
+          data-label="tr('Polling Interval (ms)')"
+          data-type="slider"
+          data-default="1500"
+          data-min="500"
+          data-max="5000"
+          data-step="100">
+
+    <meta name="x-icue-property" content="useSystemAccent"
+          data-label="tr('Use Windows Accent Color')"
+          data-type="switch"
+          data-default="true">
+
+    <meta name="x-icue-property" content="textColor"
+          data-label="tr('Text Color')"
+          data-type="color"
+          data-default="'#ffffff'">
+
+    <meta name="x-icue-property" content="accentColor"
+          data-label="tr('Custom Accent Color')"
+          data-type="color"
+          data-default="'#1db954'">
+
+    <meta name="x-icue-property" content="backgroundColor"
+          data-label="tr('Background Color')"
+          data-type="color"
+          data-default="'#0a0a0c'">
+
+    <meta name="x-icue-property" content="transparency"
+          data-label="tr('Background Transparency')"
+          data-type="slider"
+          data-default="0"
+          data-min="0"
+          data-max="100"
+          data-step="1">
+
+    <meta name="x-icue-property" content="useAlbumArtBackground"
+          data-label="tr('Use Album Art As Background')"
+          data-type="switch"
+          data-default="true">
+
+    <meta name="x-icue-property" content="autoExpand"
+          data-label="tr('Auto-expand to listening view when idle')"
+          data-type="switch"
+          data-default="true">
+
+    <meta name="x-icue-property" content="autoExpandAfterSec"
+          data-label="tr('Idle delay before expanding (seconds)')"
+          data-type="slider"
+          data-default="30"
+          data-min="10"
+          data-max="120"
+          data-step="5">
+
+    <meta name="x-icue-property" content="showLyrics"
+          data-label="tr('Show synced lyrics in listening view')"
+          data-type="switch"
+          data-default="true">
+
+    <meta name="x-icue-property" content="lyricSyncOffsetMs"
+          data-label="tr('Lyric sync offset (ms)')"
+          data-type="slider"
+          data-default="0"
+          data-min="-2000"
+          data-max="2000"
+          data-step="50">
+
+    <script id="x-icue-groups" type="application/json">
+      [
+        { "title": "tr('Behavior')", "properties": ["pollIntervalMs", "autoExpand", "autoExpandAfterSec", "showLyrics", "lyricSyncOffsetMs"] },
+        { "title": "tr('Appearance')", "properties": ["useSystemAccent", "textColor", "accentColor", "backgroundColor", "transparency", "useAlbumArtBackground"] }
+      ]
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

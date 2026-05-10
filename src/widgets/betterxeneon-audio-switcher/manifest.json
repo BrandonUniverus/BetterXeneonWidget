@@ -1,0 +1,16 @@
+{
+  "author": "Brandon Bachmeier",
+  "id": "com.betterxeneon.audioswitcher",
+  "name": "Better Audio Switcher",
+  "description": "Switch the Windows default audio output device and control system volume from your Xeneon Edge. Requires the BetterXeneonWidget host service running on 127.0.0.1:8976.",
+  "version": "0.1.0",
+  "preview_icon": "resources/icon.svg",
+  "min_framework_version": "1.0.1",
+  "os": [
+    { "platform": "windows" }
+  ],
+  "supported_devices": [
+    { "type": "dashboard_lcd" }
+  ],
+  "interactive": true
+}
