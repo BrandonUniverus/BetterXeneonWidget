@@ -218,144 +218,124 @@
       min-width: 0;
     }
 
-    /* Up-next line — shows the head of the Spotify queue when authed.
-       Hidden via display:none when no queue (so it doesn't reserve a
-       blank row in the layout). Sits between source line and lyrics. */
-    .upnext {
+    /* Up-next chip + queue button live at the top-right of the header
+       in wide mode, beside the title. In vertical mode they hide
+       (the centered narrow column doesn't have room). */
+    .header-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+    }
+    .root.size-vertical .header-row { flex-direction: column; align-items: center; }
+    .text { flex: 1 1 auto; min-width: 0; }
+    .header-right {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 50%;
+    }
+    .root.size-vertical .header-right { display: none; }
+    .upnext-chip {
       font-size: 11px;
       letter-spacing: 0.02em;
-      opacity: 0.55;
+      opacity: 0.6;
       max-width: 100%;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      margin-top: 2px;
+      min-width: 0;
     }
-    .upnext.empty { display: none; }
-    .upnext .label {
+    .upnext-chip.empty { display: none; }
+    .upnext-chip .label {
       text-transform: uppercase;
       font-weight: 700;
       letter-spacing: 0.08em;
       color: #1db954;
       margin-right: 6px;
     }
-
-    /* Library modal — full-cell overlay with a scrollable playlist
-       list. Triggered by the lib button when Spotify is authed. */
-    .modal-backdrop {
-      position: absolute;
-      inset: 0;
-      z-index: 10;
-      background: rgba(0, 0, 0, 0.7);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      box-sizing: border-box;
-    }
-    .modal-backdrop.hidden { display: none; }
-    .modal {
-      width: 100%;
-      max-width: 600px;
-      max-height: 100%;
-      background: #15151a;
-      border-radius: 14px;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    .modal-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 14px 18px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    .queue-btn {
       flex: 0 0 auto;
-    }
-    .modal-title {
-      font-size: 16px;
-      font-weight: 700;
-      flex: 1 1 auto;
-    }
-    .modal-action {
-      border: none;
-      background: rgba(255, 255, 255, 0.08);
-      color: #fff;
-      font-size: 12px;
-      letter-spacing: 0.04em;
-      padding: 8px 12px;
-      border-radius: 999px;
-      cursor: pointer;
-      touch-action: manipulation;
-      transition: background 80ms;
-      flex: 0 0 auto;
-    }
-    .modal-action:hover, .modal-action:active { background: rgba(255, 255, 255, 0.13); }
-    .modal-close {
-      width: 36px;
-      height: 36px;
+      width: 28px;
+      height: 28px;
       border-radius: 50%;
       border: none;
       background: rgba(255, 255, 255, 0.08);
       color: #fff;
-      font-size: 18px;
-      cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
+      cursor: pointer;
+      padding: 0;
       touch-action: manipulation;
+      transition: background 80ms;
     }
-    .modal-list {
+    .queue-btn:hover, .queue-btn:active, .queue-btn.active {
+      background: rgba(29, 185, 84, 0.4);
+    }
+    .queue-btn svg { width: 55%; height: 55%; pointer-events: none; }
+
+    /* List view (queue or playlists) — fills the same slot the lyrics
+       container does in the content column. */
+    .list-view {
       flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
+      font-size: clamp(12px, 2.2vmin, 16px);
     }
-    .modal-list::-webkit-scrollbar { width: 6px; }
-    .modal-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
-    .modal-row {
+    .list-view::-webkit-scrollbar { width: 6px; }
+    .list-view::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
+    .list-view.hidden { display: none; }
+    .list-row {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 10px 18px;
+      gap: 10px;
+      padding: 6px 8px;
       border: none;
       background: none;
-      color: #fff;
+      color: inherit;
       width: 100%;
       text-align: left;
       cursor: pointer;
       touch-action: manipulation;
+      border-radius: 6px;
       transition: background 80ms;
     }
-    .modal-row:hover, .modal-row:active { background: rgba(255, 255, 255, 0.06); }
-    .modal-row .pl-art {
-      width: 44px;
-      height: 44px;
-      border-radius: 6px;
+    .list-row:hover, .list-row:active { background: rgba(255, 255, 255, 0.06); }
+    .list-row .lr-art {
+      width: 36px;
+      height: 36px;
+      border-radius: 4px;
       object-fit: cover;
-      background: #2a2a32;
+      background: rgba(255, 255, 255, 0.06);
       flex: 0 0 auto;
     }
-    .modal-row .pl-meta {
+    .list-row .lr-meta {
       flex: 1 1 auto;
       min-width: 0;
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 1px;
     }
-    .modal-row .pl-name {
-      font-size: 14px;
+    .list-row .lr-name {
       font-weight: 600;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .modal-row .pl-count {
+    .list-row .lr-sub {
       font-size: 11px;
       opacity: 0.55;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .modal-empty {
-      padding: 30px 18px;
+    .list-empty {
+      padding: 30px 12px;
       text-align: center;
       font-size: 12px;
       opacity: 0.5;
@@ -400,17 +380,7 @@
       color: #1db954;
       font-weight: 700;
     }
-    .lyrics.empty { display: none; }
-    .lyrics-fallback {
-      flex: 1 1 auto;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 11px;
-      letter-spacing: 0.06em;
-      opacity: 0.4;
-    }
-    .lyrics-fallback.hidden { display: none; }
+    .lyrics.hidden { display: none; }
 
     /* Progress bar — first element of the "bottom group". margin-top: auto
        eats whatever vertical slack is left in .content, pushing this and
@@ -527,19 +497,36 @@
     <img class="art-bg" id="artBg" alt="" aria-hidden="true">
     <img class="art empty" id="art" alt="">
     <div class="content">
-      <div class="text">
-        <div class="title" id="title">Connecting…</div>
-        <div class="artist" id="artist"></div>
-        <div class="source empty" id="source">
-          <span class="dot" aria-hidden="true"></span>
-          <span class="name">Spotify</span>
-          <span aria-hidden="true">·</span>
-          <span class="album" id="sourceAlbum"></span>
+      <div class="header-row">
+        <div class="text">
+          <div class="title" id="title">Connecting…</div>
+          <div class="artist" id="artist"></div>
+          <div class="source empty" id="source">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="name">Spotify</span>
+            <span aria-hidden="true">·</span>
+            <span class="album" id="sourceAlbum"></span>
+          </div>
         </div>
-        <div class="upnext empty" id="upnext"><span class="label">Up next</span><span id="upnextText"></span></div>
+        <div class="header-right">
+          <div class="upnext-chip empty" id="upnext"><span class="label">Up next</span><span id="upnextText"></span></div>
+          <button class="queue-btn" id="queueBtn" type="button" aria-label="Show queue" title="Show queue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="8" y1="6" x2="21" y2="6"/>
+              <line x1="8" y1="12" x2="21" y2="12"/>
+              <line x1="8" y1="18" x2="21" y2="18"/>
+              <line x1="3" y1="6" x2="3.01" y2="6"/>
+              <line x1="3" y1="12" x2="3.01" y2="12"/>
+              <line x1="3" y1="18" x2="3.01" y2="18"/>
+            </svg>
+          </button>
+        </div>
       </div>
+      <!-- Lyrics container. Visible when view='lyrics' AND lyrics found. -->
       <div class="lyrics empty" id="lyrics"></div>
-      <div class="lyrics-fallback hidden" id="lyricsFallback">no synced lyrics</div>
+      <!-- Queue + Playlists list. Visible when view='queue' or 'playlists'.
+           Same DOM container, repopulated based on state. -->
+      <div class="list-view hidden" id="listView"></div>
       <div class="progress">
         <div class="track"><div class="fill" id="fill"></div></div>
         <div class="times"><span id="curTime">0:00</span><span id="totTime">0:00</span></div>
@@ -576,22 +563,6 @@
       </div>
     </div>
 
-    <!-- Library modal — full-cell overlay shown when the lib button is
-         tapped while authed. Click on the backdrop OR the close button
-         dismisses it; click on a row plays that playlist via the host
-         and dismisses. Hidden by default. -->
-    <div class="modal-backdrop hidden" id="libModal" role="dialog" aria-modal="true" aria-label="Library">
-      <div class="modal" id="libModalCard">
-        <div class="modal-header">
-          <span class="modal-title">Library</span>
-          <button class="modal-action" id="libModalDisconnect" type="button" aria-label="Disconnect Spotify">Disconnect</button>
-          <button class="modal-close" id="libModalClose" type="button" aria-label="Close">×</button>
-        </div>
-        <div class="modal-list" id="libModalList">
-          <div class="modal-empty" id="libModalEmpty">No playlists yet — give it a moment.</div>
-        </div>
-      </div>
-    </div>
   </main>
 
   <script type="module">
@@ -672,10 +643,7 @@
     let optAutoExpandAfterSec = 30;
 
     // Spotify state — populated by the slow Spotify poll. Up-next is the
-    // head of the queue; library is the user's playlists. Refreshed every
-    // SPOTIFY_SLOW_MS (cheap to ask the host, but every miss past its
-    // 30-min cache hits the actual Spotify API and risks 429, so don't
-    // hammer).
+    // head of the queue; library is the user's playlists.
     const SPOTIFY_QUEUE_MS = 6000;
     const SPOTIFY_PLAYLISTS_MS = 600000;   // 10 minutes
     let spotifyQueue = [];
@@ -683,6 +651,13 @@
     let lastUpnextText = '';
     let queueTimer = null;
     let playlistsTimer = null;
+
+    // View state for the content area: 'lyrics' (default — lyrics if
+    // available, queue auto-fallback otherwise), 'queue' (user explicitly
+    // tapped the queue button), or 'playlists' (user tapped the lib btn
+    // while authed). Auto-resets to 'lyrics' on track change so the user
+    // doesn't get stuck on a stale list.
+    let currentView = 'lyrics';
     // Aspect-ratio threshold separating wide-strip from square/tall.
     // Edge cell aspect ratios from the kit:
     //   Small horizontal:  840×344 = 2.44 → wide
@@ -701,18 +676,13 @@
     const artBgEl = document.getElementById('artBg');
     const upnextEl = document.getElementById('upnext');
     const upnextTextEl = document.getElementById('upnextText');
-    const libModalEl = document.getElementById('libModal');
-    const libModalCardEl = document.getElementById('libModalCard');
-    const libModalCloseEl = document.getElementById('libModalClose');
-    const libModalDisconnectEl = document.getElementById('libModalDisconnect');
-    const libModalListEl = document.getElementById('libModalList');
-    const libModalEmptyEl = document.getElementById('libModalEmpty');
+    const queueBtn = document.getElementById('queueBtn');
+    const listViewEl = document.getElementById('listView');
     const titleEl = document.getElementById('title');
     const artistEl = document.getElementById('artist');
     const sourceEl = document.getElementById('source');
     const sourceAlbumEl = document.getElementById('sourceAlbum');
     const lyricsEl = document.getElementById('lyrics');
-    const lyricsFallbackEl = document.getElementById('lyricsFallback');
     const prevBtn = document.getElementById('prevBtn');
     const toggleBtn = document.getElementById('toggleBtn');
     const nextBtn = document.getElementById('nextBtn');
@@ -913,9 +883,14 @@
         try { await fetch(HOST + '/api/spotify/connect', { method: 'POST' }); }
         catch { /* surfaced by next poll's status */ }
       } else {
-        // Authed: open the Library modal.
-        openLibraryModal();
+        // Authed: toggle playlists view in the same content slot the
+        // lyrics/queue use (no modal — keeps the user in-context with
+        // the rest of the widget). Tapping again returns to lyrics.
+        setView(currentView === 'playlists' ? 'lyrics' : 'playlists');
       }
+    });
+    queueBtn.addEventListener('click', () => {
+      setView(currentView === 'queue' ? 'lyrics' : 'queue');
     });
 
     // --- Up-next renderer + Spotify queue/playlists pollers --------------
@@ -932,7 +907,14 @@
     }
 
     async function pollSpotifyQueue() {
-      if (!spotifyAuthed) { setUpnext(''); return; }
+      if (!spotifyAuthed) {
+        setUpnext('');
+        spotifyQueue = [];
+        // The queue is what we fall back to when lyrics are absent, so a
+        // fresh empty queue still needs a re-render to clear the list.
+        if (listVisible()) applyView();
+        return;
+      }
       try {
         const r = await fetch(HOST + '/api/spotify/queue');
         if (!r.ok) return;
@@ -944,89 +926,201 @@
         } else {
           setUpnext('');
         }
+        if (listVisible()) applyView();
       } catch { /* non-fatal */ }
     }
 
     async function pollSpotifyPlaylists() {
-      if (!spotifyAuthed) { spotifyPlaylists = []; renderLibraryList(); return; }
+      if (!spotifyAuthed) {
+        spotifyPlaylists = [];
+        if (currentView === 'playlists') applyView();
+        return;
+      }
       try {
         const r = await fetch(HOST + '/api/spotify/playlists');
         if (!r.ok) return;
         const data = await r.json();
         spotifyPlaylists = Array.isArray(data) ? data : [];
-        // Only re-render the modal list if it's currently open — otherwise
-        // we'll lazy-render on next open.
-        if (!libModalEl.classList.contains('hidden')) renderLibraryList();
+        // Only re-render if we're currently showing playlists — otherwise
+        // it's stored ready for whenever the user taps the lib button.
+        if (currentView === 'playlists') applyView();
       } catch { /* non-fatal */ }
     }
 
-    // --- Library modal ---------------------------------------------------
+    // --- View state machine ---------------------------------------------
+    // The same content slot under the header swaps between three views:
+    //   lyrics     — the synced lyric track. Falls back to queue when no
+    //                lyrics are available (or the option is off) so the
+    //                slot is never just dead space.
+    //   queue      — Spotify "play queue" (next-up tracks). User-explicit.
+    //   playlists  — Spotify user playlists. User-explicit, authed-only.
+    // setView() also primes the relevant data poll so the user doesn't
+    // see a stale list — the periodic pollers keep it fresh after that.
+
     async function playPlaylist(id) {
       try { await fetch(HOST + '/api/spotify/playlists/' + encodeURIComponent(id) + '/play', { method: 'POST' }); }
       catch { /* surfaced by next poll's status */ }
     }
 
-    function renderLibraryList() {
-      // Build via DocumentFragment to avoid N appendChild reflows. Each
-      // playlist row is a <button> so it's keyboard-and-touch friendly.
-      const frag = document.createDocumentFragment();
-      for (const pl of spotifyPlaylists) {
-        const row = document.createElement('button');
-        row.className = 'modal-row';
-        row.type = 'button';
-        const img = document.createElement('img');
-        img.className = 'pl-art';
-        img.alt = '';
-        if (pl.albumArtUrl) img.src = pl.albumArtUrl;
-        const meta = document.createElement('div');
-        meta.className = 'pl-meta';
-        const name = document.createElement('div');
-        name.className = 'pl-name';
-        name.textContent = pl.name || 'Untitled';
-        const count = document.createElement('div');
-        count.className = 'pl-count';
-        count.textContent = (pl.trackCount || 0) + ' tracks';
-        meta.appendChild(name);
-        meta.appendChild(count);
-        row.appendChild(img);
-        row.appendChild(meta);
-        row.addEventListener('click', () => {
-          if (pl.id) playPlaylist(pl.id);
-          closeLibraryModal();
-        });
-        frag.appendChild(row);
-      }
-      libModalListEl.textContent = '';
-      if (spotifyPlaylists.length === 0) {
-        libModalListEl.appendChild(libModalEmptyEl);
+    async function disconnectSpotify() {
+      // Tell the host to drop the stored token. The widget's next poll
+      // will see connected:false within ~1.5s and the auth-flip handler
+      // will swap the lib button back to Connect, clear up-next, etc.
+      try { await fetch(HOST + '/api/spotify/disconnect', { method: 'POST' }); }
+      catch { /* surfaced by next poll */ }
+      setView('lyrics');
+    }
+
+    function listVisible() {
+      // True when the list-view slot is the visible one: either the
+      // user is on queue/playlists, or the default 'lyrics' state has
+      // fallen back to queue because there are no lyrics to show.
+      if (currentView !== 'lyrics') return true;
+      return parsedLyrics.length === 0 || !optShowLyrics;
+    }
+
+    function setView(view) {
+      currentView = view;
+      // Prime the relevant data so the list isn't blank on first open.
+      if (view === 'playlists') pollSpotifyPlaylists();
+      if (view === 'queue') pollSpotifyQueue();
+      applyView();
+    }
+
+    function applyView() {
+      const hasLyrics = parsedLyrics.length > 0 && optShowLyrics;
+      // 'lyrics' is the implicit default — but if we don't have any to
+      // show, the list-view takes over and renders the queue. Tracking
+      // 'lyrics' separately from the queue/playlists choice means a
+      // track change can reset us back to "show lyrics if you have
+      // them" without forgetting that the user previously had us on
+      // the queue (we just re-evaluate every track).
+      const showList = currentView !== 'lyrics' || !hasLyrics;
+
+      lyricsEl.classList.toggle('hidden', showList);
+      listViewEl.classList.toggle('hidden', !showList);
+
+      // Active class on the buttons mirrors the user's explicit choice,
+      // not the effective view — e.g. on a lyric-less track in the
+      // default state, the queue is showing but the queue button stays
+      // inactive (a lyrics-less track isn't a user choice).
+      queueBtn.classList.toggle('active', currentView === 'queue');
+      libBtn.classList.toggle('active', currentView === 'playlists');
+
+      if (!showList) return;
+      if (currentView === 'playlists') {
+        renderPlaylistsList();
       } else {
-        libModalListEl.appendChild(frag);
+        renderQueueList();
       }
     }
 
-    function openLibraryModal() {
-      libModalEl.classList.remove('hidden');
-      // Refresh whenever opened — Spotify rate-limits hard, so the host
-      // serves cached most of the time anyway.
-      pollSpotifyPlaylists();
-      renderLibraryList();
+    function renderQueueList() {
+      const frag = document.createDocumentFragment();
+      if (spotifyQueue.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'list-empty';
+        empty.textContent = spotifyAuthed
+          ? 'Queue is empty'
+          : 'Connect Spotify to see the queue';
+        frag.appendChild(empty);
+      } else {
+        for (const t of spotifyQueue) {
+          const row = document.createElement('div');
+          row.className = 'list-row';
+          const img = document.createElement('img');
+          img.className = 'lr-art';
+          img.alt = '';
+          if (t.albumArtUrl) img.src = t.albumArtUrl;
+          const meta = document.createElement('div');
+          meta.className = 'lr-meta';
+          const name = document.createElement('div');
+          name.className = 'lr-name';
+          name.textContent = t.title || 'Unknown';
+          const sub = document.createElement('div');
+          sub.className = 'lr-sub';
+          sub.textContent = t.artist || '';
+          meta.appendChild(name);
+          meta.appendChild(sub);
+          row.appendChild(img);
+          row.appendChild(meta);
+          frag.appendChild(row);
+        }
+      }
+      listViewEl.textContent = '';
+      listViewEl.appendChild(frag);
     }
-    function closeLibraryModal() {
-      libModalEl.classList.add('hidden');
+
+    function renderPlaylistsList() {
+      const frag = document.createDocumentFragment();
+      if (spotifyPlaylists.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'list-empty';
+        empty.textContent = spotifyAuthed
+          ? 'No playlists found'
+          : 'Connect Spotify to see your playlists';
+        frag.appendChild(empty);
+      } else {
+        for (const pl of spotifyPlaylists) {
+          const row = document.createElement('button');
+          row.className = 'list-row';
+          row.type = 'button';
+          const img = document.createElement('img');
+          img.className = 'lr-art';
+          img.alt = '';
+          if (pl.albumArtUrl) img.src = pl.albumArtUrl;
+          const meta = document.createElement('div');
+          meta.className = 'lr-meta';
+          const name = document.createElement('div');
+          name.className = 'lr-name';
+          name.textContent = pl.name || 'Untitled';
+          const sub = document.createElement('div');
+          sub.className = 'lr-sub';
+          sub.textContent = (pl.trackCount || 0) + ' tracks';
+          meta.appendChild(name);
+          meta.appendChild(sub);
+          row.appendChild(img);
+          row.appendChild(meta);
+          row.addEventListener('click', () => {
+            if (pl.id) playPlaylist(pl.id);
+            // Snap back to lyrics/queue so the user sees the track
+            // they just kicked off, not the playlist list.
+            setView('lyrics');
+          });
+          frag.appendChild(row);
+        }
+      }
+      // Disconnect lives at the bottom of the playlists list — only
+      // surfaced when the user is intentionally in the auth-affected
+      // view, so it's discoverable without being in the way of the
+      // common case (just tapping a playlist).
+      if (spotifyAuthed) {
+        const disconnect = document.createElement('button');
+        disconnect.className = 'list-row';
+        disconnect.type = 'button';
+        disconnect.style.marginTop = '8px';
+        disconnect.style.opacity = '0.65';
+        const icon = document.createElement('div');
+        icon.className = 'lr-art';
+        icon.style.display = 'flex';
+        icon.style.alignItems = 'center';
+        icon.style.justifyContent = 'center';
+        icon.style.fontSize = '18px';
+        icon.textContent = '⏻';
+        const meta = document.createElement('div');
+        meta.className = 'lr-meta';
+        const name = document.createElement('div');
+        name.className = 'lr-name';
+        name.textContent = 'Disconnect Spotify';
+        meta.appendChild(name);
+        disconnect.appendChild(icon);
+        disconnect.appendChild(meta);
+        disconnect.addEventListener('click', disconnectSpotify);
+        frag.appendChild(disconnect);
+      }
+      listViewEl.textContent = '';
+      listViewEl.appendChild(frag);
     }
-    libModalCloseEl.addEventListener('click', closeLibraryModal);
-    libModalEl.addEventListener('click', e => {
-      // Click on the backdrop (not the card) closes the modal.
-      if (e.target === libModalEl) closeLibraryModal();
-    });
-    libModalDisconnectEl.addEventListener('click', async () => {
-      // Tell the host to drop the stored token. The widget's next poll
-      // will see connected:false within ~1.5s and the auth-flip handler
-      // will swap the lib button back to Connect, clear the up-next, etc.
-      try { await fetch(HOST + '/api/spotify/disconnect', { method: 'POST' }); }
-      catch { /* surfaced by next poll */ }
-      closeLibraryModal();
-    });
 
     function fmtTime(ms) {
       const s = Math.max(0, Math.floor(ms / 1000));
@@ -1119,7 +1213,7 @@
       lyricsTrackEl = null;
       currentLineIdx = -1;
       lyricsEl.textContent = '';
-      lyricsEl.classList.add('empty');
+      applyView();
     }
 
     function renderLyrics(lines) {
@@ -1140,7 +1234,7 @@
       requestAnimationFrame(() => {
         if (lyricsTrackEl === track) track.style.transition = '';
       });
-      lyricsEl.classList.remove('empty');
+      applyView();
     }
 
     async function fetchLyricsFor(artist, title, album) {
@@ -1148,30 +1242,29 @@
       if (key === lyricsFetchKey) return;
       lyricsFetchKey = key;
       clearLyrics();
-      lyricsFallbackEl.classList.add('hidden');
       // Bail early when the user has lyrics off. We still set
       // lyricsFetchKey above so toggling-on later triggers a fetch via
       // the showLyrics callback (which clears the key for the same
-      // track and re-calls fetchLyricsFor).
-      if (!optShowLyrics) return;
+      // track and re-calls fetchLyricsFor). When lyrics are off, the
+      // queue auto-fallback in applyView takes over.
+      if (!optShowLyrics) { applyView(); return; }
       try {
         const url = HOST + '/api/lyrics?artist=' + encodeURIComponent(artist) +
           '&title=' + encodeURIComponent(title) +
           (album ? '&album=' + encodeURIComponent(album) : '');
         const res = await fetch(url);
-        if (!res.ok) return;
+        if (!res.ok) { applyView(); return; }
         const data = await res.json();
         if (key !== lyricsFetchKey) return;
         if (data.found && data.syncedLyrics) {
           const raw = parseLrc(data.syncedLyrics);
           parsedLyrics = addInstrumentalMarkers(raw, durationMs);
           renderLyrics(parsedLyrics);
-          lyricsFallbackEl.classList.add('hidden');
         } else {
-          lyricsFallbackEl.classList.remove('hidden');
+          applyView();
         }
       } catch {
-        lyricsFallbackEl.classList.remove('hidden');
+        applyView();
       }
     }
 
@@ -1258,7 +1351,11 @@
           spotifyQueue = [];
           spotifyPlaylists = [];
           setUpnext('');
-          renderLibraryList();
+          // If the user was on the playlists view when auth dropped,
+          // bounce them back to lyrics/queue — the playlists view has
+          // nothing to show without a token.
+          if (currentView === 'playlists') currentView = 'lyrics';
+          applyView();
         }
 
         const title = np.hasSession ? (np.title || 'Unknown title') : 'Nothing playing';
@@ -1312,11 +1409,17 @@
         currentTitle = title;
         currentAlbum = np.album || '';
 
+        // Track change resets the user out of any explicit
+        // queue/playlists view back to lyrics — feels jarring if the
+        // queue stays up after the next-track-up has finished and is
+        // now actually playing.
+        if (trackChanged && currentView !== 'lyrics') {
+          currentView = 'lyrics';
+        }
         if (trackChanged && np.hasSession && artist && title) {
           fetchLyricsFor(artist, title, np.album || '');
         } else if (!np.hasSession) {
           clearLyrics();
-          lyricsFallbackEl.classList.add('hidden');
           currentArtist = '';
           currentTitle = '';
           currentAlbum = '';
@@ -1356,11 +1459,11 @@
     registerIcueOption('showLyrics', true, value => {
       optShowLyrics = value !== false;
       if (!optShowLyrics) {
-        // Toggling off: clear the rendered list + the fallback message,
-        // and drop the fetch key so re-enabling later triggers a fresh
-        // fetch on the same track.
+        // Toggling off: clear the rendered lyric list and drop the
+        // fetch key so re-enabling later triggers a fresh fetch on
+        // the same track. clearLyrics → applyView falls through to
+        // the queue list automatically.
         clearLyrics();
-        lyricsFallbackEl.classList.add('hidden');
         lyricsFetchKey = '';
       } else {
         // Toggling on: drop the fetch key AND fetch directly for the
@@ -1369,6 +1472,10 @@
         lyricsFetchKey = '';
         if (currentArtist && currentTitle) {
           fetchLyricsFor(currentArtist, currentTitle, currentAlbum);
+        } else {
+          // No active track to fetch for — but we still need to
+          // re-evaluate the view so any visible queue stays consistent.
+          applyView();
         }
       }
     });
