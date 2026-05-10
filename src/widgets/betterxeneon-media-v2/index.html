@@ -24,27 +24,114 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 8px;
+      gap: 6px;
       padding: 16px;
       box-sizing: border-box;
+      text-align: center;
     }
     .title {
       font-size: clamp(20px, 5vmin, 36px);
       font-weight: 700;
       letter-spacing: 0.01em;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .artist {
+      font-size: clamp(14px, 3vmin, 22px);
+      font-weight: 500;
+      opacity: 0.75;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .phase {
+      margin-top: 12px;
       font-size: 11px;
       letter-spacing: 0.08em;
       opacity: 0.45;
       text-transform: uppercase;
     }
+    /* Tiny "live" indicator that pulses on each successful poll. If polling
+       is wedged or erroring, this stops pulsing and you can see why. */
+    .pulse {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #1db954;
+      margin-right: 8px;
+      vertical-align: middle;
+      transition: opacity 200ms;
+      opacity: 0.25;
+    }
+    .pulse.live { opacity: 1; }
+    .err {
+      color: #ff6b6b;
+    }
   </style>
 </head>
 <body>
   <div class="root">
-    <div class="title">Now Playing</div>
-    <div class="phase">media v2 · phase 0</div>
+    <div class="title" id="title">Connecting…</div>
+    <div class="artist" id="artist"></div>
+    <div class="phase"><span class="pulse" id="pulse"></span><span id="status">media v2 · phase 1</span></div>
   </div>
+
+  <script type="module">
+    // Phase 1 goal: prove that polling + textContent updates do NOT flicker.
+    // We already verified in the bisect grid that 200ms text updates are
+    // smooth — this just adds a real fetch every 1.5s. If THIS phase
+    // flickers, the culprit is fetch-driven layout thrash, otherwise we
+    // move on to Phase 2 (album art).
+
+    const HOST = 'http://127.0.0.1:8976';
+    const POLL_MS = 1500;
+
+    const titleEl = document.getElementById('title');
+    const artistEl = document.getElementById('artist');
+    const pulseEl = document.getElementById('pulse');
+    const statusEl = document.getElementById('status');
+
+    // Track last-rendered values so we only touch the DOM when something
+    // actually changed. textContent assignment to the same string is cheap
+    // but still triggers a style recalc — skipping it altogether is cheaper.
+    let lastTitle = null;
+    let lastArtist = null;
+    let pulseTimeout = null;
+
+    function setText(el, value) {
+      if (el.textContent !== value) el.textContent = value;
+    }
+
+    function flashPulse() {
+      pulseEl.classList.add('live');
+      if (pulseTimeout) clearTimeout(pulseTimeout);
+      pulseTimeout = setTimeout(() => pulseEl.classList.remove('live'), 250);
+    }
+
+    async function pollOnce() {
+      try {
+        const res = await fetch(HOST + '/api/media/now-playing');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const np = await res.json();
+        const title = np.hasSession ? (np.title || 'Unknown title') : 'Nothing playing';
+        const artist = np.hasSession ? (np.artist || '') : '';
+        if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
+        if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
+        statusEl.classList.remove('err');
+        statusEl.textContent = 'media v2 · phase 1';
+        flashPulse();
+      } catch (e) {
+        statusEl.classList.add('err');
+        statusEl.textContent = 'host offline · ' + (e.message || 'unknown error');
+      }
+    }
+
+    pollOnce();
+    setInterval(pollOnce, POLL_MS);
+  </script>
 </body>
 </html>
