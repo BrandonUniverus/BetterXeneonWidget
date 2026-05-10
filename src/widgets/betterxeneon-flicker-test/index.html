@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tr('Flicker Test')</title>
+  <link rel="icon" type="image/svg+xml" href="resources/icon.svg">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #0a0a0c;
+      overflow: hidden;
+      color: #fff;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    .stage {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8%;
+    }
+    .ring {
+      width: min(36vmin, 200px);
+      height: min(36vmin, 200px);
+      border: 6px solid transparent;
+      border-top-color: #1db954;
+      border-right-color: #1db954;
+      border-radius: 50%;
+      animation: spin 1.5s linear infinite;
+    }
+    .ring.slow {
+      border-top-color: #4cc9f0;
+      border-right-color: #4cc9f0;
+      animation-duration: 6s;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .label {
+      position: absolute;
+      bottom: 6%;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 14px;
+      opacity: 0.55;
+      letter-spacing: 0.05em;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="ring"></div>
+    <div class="ring slow"></div>
+  </div>
+  <div class="label">flicker test &middot; pure CSS &middot; no JS</div>
+</body>
+</html>
