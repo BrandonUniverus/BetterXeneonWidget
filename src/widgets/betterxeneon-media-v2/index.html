@@ -105,6 +105,38 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    /* Source line under artist — shows "Spotify · Album" when SMTC reports
+       Spotify, hidden otherwise (no flex room reserved when empty). */
+    .source {
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      opacity: 0.6;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      margin-top: 2px;
+    }
+    .root.size-vertical .source { justify-content: center; }
+    .source.empty { display: none; }
+    .source .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #1db954;
+      flex-shrink: 0;
+    }
+    .source .name {
+      font-weight: 700;
+      color: #1db954;
+    }
+    .source .album {
+      opacity: 0.85;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
 
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
@@ -200,18 +232,22 @@
       opacity: 0.6;
     }
 
+    /* Transport — spans the full content width. Buttons are spread evenly
+       so the row visually balances regardless of how wide the content
+       column ends up (wide-strip vs vertical). */
     .transport {
       display: flex;
-      gap: 12px;
+      gap: 8px;
       align-items: center;
       flex: 0 0 auto;
+      width: 100%;
+      justify-content: space-between;
     }
-    .root.size-vertical .transport { justify-content: center; }
-    .root.size-wide .transport { justify-content: flex-start; }
     .t-btn {
-      width: clamp(40px, 7vmin, 56px);
-      height: clamp(40px, 7vmin, 56px);
-      border-radius: 50%;
+      flex: 1 1 0;
+      min-width: 0;
+      height: clamp(44px, 7.5vmin, 60px);
+      border-radius: 999px;
       border: none;
       background: #1c1c22;
       color: #fff;
@@ -228,14 +264,20 @@
     .t-btn:active { background: #2a2a32; }
     .t-btn:disabled { opacity: 0.3; cursor: default; }
     .t-btn svg {
-      width: 42%;
-      height: 42%;
+      width: 30%;
+      max-width: 24px;
+      max-height: 24px;
       pointer-events: none;
       fill: currentColor;
     }
     .t-btn.center {
       background: #1db954;
       color: #08130c;
+    }
+    /* Connect/Playlists slot — Spotify-green tinted to match the source
+       chip color, but a subtler treatment than the play button. */
+    .t-btn.lib {
+      color: #1db954;
     }
 
     .phase {
@@ -245,19 +287,6 @@
       text-transform: uppercase;
       flex: 0 0 auto;
     }
-    .badge {
-      display: inline-block;
-      margin-left: 8px;
-      padding: 1px 6px;
-      border-radius: 999px;
-      background: #1db954;
-      color: #08130c;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: none;
-      visibility: hidden;
-    }
-    .badge.live { visibility: visible; }
     .pulse {
       display: inline-block;
       width: 6px;
@@ -280,6 +309,12 @@
       <div class="text">
         <div class="title" id="title">Connecting…</div>
         <div class="artist" id="artist"></div>
+        <div class="source empty" id="source">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="name">Spotify</span>
+          <span aria-hidden="true">·</span>
+          <span class="album" id="sourceAlbum"></span>
+        </div>
       </div>
       <div class="lyrics empty" id="lyrics"></div>
       <div class="lyrics-fallback hidden" id="lyricsFallback">no synced lyrics</div>
@@ -303,9 +338,19 @@
             <path d="M5 5l9 7-9 7zM16 5h2v14h-2z"/>
           </svg>
         </button>
+        <!-- Slot 4: Playlists when authed, Connect when not. Same shape so
+             the layout doesn't shift when auth flips. id stays stable;
+             we swap the inner SVG + aria-label + click handler. -->
+        <button class="t-btn lib" id="libBtn" type="button" aria-label="Connect Spotify">
+          <svg viewBox="0 0 24 24" aria-hidden="true" id="libIcon">
+            <!-- Default = Spotify wordmark icon (Connect) -->
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>
+          </svg>
+        </button>
       </div>
       <div class="phase">
-        <span class="pulse" id="pulse"></span><span id="status">media v2 · phase 7</span><span class="badge" id="spotifyBadge">spotify</span>
+        <span class="pulse" id="pulse"></span><span id="status">media v2 · phase 7.5</span>
       </div>
     </div>
   </main>
@@ -339,18 +384,21 @@
     const artEl = document.getElementById('art');
     const titleEl = document.getElementById('title');
     const artistEl = document.getElementById('artist');
+    const sourceEl = document.getElementById('source');
+    const sourceAlbumEl = document.getElementById('sourceAlbum');
     const lyricsEl = document.getElementById('lyrics');
     const lyricsFallbackEl = document.getElementById('lyricsFallback');
     const prevBtn = document.getElementById('prevBtn');
     const toggleBtn = document.getElementById('toggleBtn');
     const nextBtn = document.getElementById('nextBtn');
+    const libBtn = document.getElementById('libBtn');
     const toggleIcon = document.getElementById('toggleIcon');
+    const libIcon = document.getElementById('libIcon');
     const fillEl = document.getElementById('fill');
     const curTimeEl = document.getElementById('curTime');
     const totTimeEl = document.getElementById('totTime');
     const pulseEl = document.getElementById('pulse');
     const statusEl = document.getElementById('status');
-    const spotifyBadge = document.getElementById('spotifyBadge');
 
     const PLAY_PATH = 'M7 5l13 7-13 7z';
     const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
@@ -366,7 +414,9 @@
     let lastCurTime = null;
     let lastTotTime = null;
     let lastFillRatio = -1;
-    let lastSpotifyAuthed = null;
+    let lastSourceVisible = null;     // bool: should the source line show?
+    let lastSourceAlbum = null;       // string we last wrote to .album
+    let lastLibMode = null;           // 'connect' | 'playlists'
     let pulseTimeout = null;
 
     let anchorPosMs = 0;
@@ -450,10 +500,55 @@
       return enabled;
     }
 
-    function setSpotifyAuthed(authed) {
-      if (authed !== lastSpotifyAuthed) {
-        spotifyBadge.classList.toggle('live', authed);
-        lastSpotifyAuthed = authed;
+    // Source line — shows "Spotify · <album>" under the artist when SMTC
+    // reports Spotify is the source. Hidden otherwise (no flex room).
+    function setSource(isSpotify, album) {
+      const visible = !!isSpotify;
+      if (visible !== lastSourceVisible) {
+        sourceEl.classList.toggle('empty', !visible);
+        lastSourceVisible = visible;
+      }
+      if (!visible) return;
+      const a = album || '';
+      if (a !== lastSourceAlbum) {
+        sourceAlbumEl.textContent = a;
+        lastSourceAlbum = a;
+      }
+    }
+
+    // Library/Connect slot. Authed → Playlists icon (opens library — wired
+    // up later), unauthed → Spotify wordmark (initiates OAuth). Same button
+    // element so layout doesn't shift on the auth flip.
+    const PLAYLISTS_SVG =
+      '<line x1="8" y1="6" x2="21" y2="6"/>' +
+      '<line x1="8" y1="12" x2="21" y2="12"/>' +
+      '<line x1="8" y1="18" x2="21" y2="18"/>' +
+      '<line x1="3" y1="6" x2="3.01" y2="6"/>' +
+      '<line x1="3" y1="12" x2="3.01" y2="12"/>' +
+      '<line x1="3" y1="18" x2="3.01" y2="18"/>';
+    const CONNECT_SVG =
+      '<circle cx="12" cy="12" r="10"/>' +
+      '<path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>';
+    function setLibMode(authed) {
+      const mode = authed ? 'playlists' : 'connect';
+      if (mode === lastLibMode) return;
+      lastLibMode = mode;
+      if (authed) {
+        libIcon.innerHTML = PLAYLISTS_SVG;
+        libIcon.setAttribute('fill', 'none');
+        libIcon.setAttribute('stroke', 'currentColor');
+        libIcon.setAttribute('stroke-width', '2');
+        libIcon.setAttribute('stroke-linecap', 'round');
+        libIcon.setAttribute('stroke-linejoin', 'round');
+        libBtn.setAttribute('aria-label', 'Open Playlists');
+      } else {
+        libIcon.innerHTML = CONNECT_SVG;
+        libIcon.setAttribute('fill', 'currentColor');
+        libIcon.removeAttribute('stroke');
+        libIcon.removeAttribute('stroke-width');
+        libIcon.removeAttribute('stroke-linecap');
+        libIcon.removeAttribute('stroke-linejoin');
+        libBtn.setAttribute('aria-label', 'Connect Spotify');
       }
     }
 
@@ -474,6 +569,16 @@
     prevBtn.addEventListener('click', () => postAction('/api/media/previous', 'prev'));
     toggleBtn.addEventListener('click', () => postAction('/api/media/toggle', 'toggle'));
     nextBtn.addEventListener('click', () => postAction('/api/media/next', 'next'));
+    libBtn.addEventListener('click', async () => {
+      if (lastLibMode === 'connect') {
+        // POST /api/spotify/connect — host opens the user's default browser
+        // to the Spotify auth URL via the betterxeneonwidget:// scheme.
+        try { await fetch(HOST + '/api/spotify/connect', { method: 'POST' }); }
+        catch { /* surfaced by next poll's status */ }
+      } else {
+        // Playlists modal — not yet implemented in v2 (planned: phase 8).
+      }
+    });
 
     function fmtTime(ms) {
       const s = Math.max(0, Math.floor(ms / 1000));
@@ -667,7 +772,7 @@
         const ss = await ssRes.json();
 
         spotifyAuthed = !!ss.connected;
-        setSpotifyAuthed(spotifyAuthed);
+        setLibMode(spotifyAuthed);
 
         if (spotifyAuthed) {
           try {
@@ -680,6 +785,10 @@
         const artist = np.hasSession ? (np.artist || '') : '';
         if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
         if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
+        // Source line: visible only when Spotify is the SMTC source.
+        // (Other sources just don't show this line — title/artist alone is
+        // enough for non-Spotify SMTC playback.)
+        setSource(!!np.isSpotify && !!np.hasSession, np.album || '');
         setArt(!!np.hasArt && !!np.hasSession, np.artVersion ?? 0);
 
         const playing = np.status === 'Playing';
@@ -715,7 +824,7 @@
         }
 
         statusEl.classList.remove('err');
-        statusEl.textContent = 'media v2 · phase 7';
+        statusEl.textContent = 'media v2 · phase 7.5';
         flashPulse();
       } catch (e) {
         statusEl.classList.add('err');
