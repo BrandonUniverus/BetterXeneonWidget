@@ -268,6 +268,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
       padding: 14px 18px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
       flex: 0 0 auto;
@@ -275,7 +276,22 @@
     .modal-title {
       font-size: 16px;
       font-weight: 700;
+      flex: 1 1 auto;
     }
+    .modal-action {
+      border: none;
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      padding: 8px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: background 80ms;
+      flex: 0 0 auto;
+    }
+    .modal-action:hover, .modal-action:active { background: rgba(255, 255, 255, 0.13); }
     .modal-close {
       width: 36px;
       height: 36px;
@@ -568,6 +584,7 @@
       <div class="modal" id="libModalCard">
         <div class="modal-header">
           <span class="modal-title">Library</span>
+          <button class="modal-action" id="libModalDisconnect" type="button" aria-label="Disconnect Spotify">Disconnect</button>
           <button class="modal-close" id="libModalClose" type="button" aria-label="Close">×</button>
         </div>
         <div class="modal-list" id="libModalList">
@@ -687,6 +704,7 @@
     const libModalEl = document.getElementById('libModal');
     const libModalCardEl = document.getElementById('libModalCard');
     const libModalCloseEl = document.getElementById('libModalClose');
+    const libModalDisconnectEl = document.getElementById('libModalDisconnect');
     const libModalListEl = document.getElementById('libModalList');
     const libModalEmptyEl = document.getElementById('libModalEmpty');
     const titleEl = document.getElementById('title');
@@ -1000,6 +1018,14 @@
     libModalEl.addEventListener('click', e => {
       // Click on the backdrop (not the card) closes the modal.
       if (e.target === libModalEl) closeLibraryModal();
+    });
+    libModalDisconnectEl.addEventListener('click', async () => {
+      // Tell the host to drop the stored token. The widget's next poll
+      // will see connected:false within ~1.5s and the auth-flip handler
+      // will swap the lib button back to Connect, clear the up-next, etc.
+      try { await fetch(HOST + '/api/spotify/disconnect', { method: 'POST' }); }
+      catch { /* surfaced by next poll */ }
+      closeLibraryModal();
     });
 
     function fmtTime(ms) {
