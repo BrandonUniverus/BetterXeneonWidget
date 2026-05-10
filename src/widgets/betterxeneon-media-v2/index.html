@@ -27,6 +27,8 @@
        share width 840 with very different shapes — aspect ratio cleanly
        separates "wide strip" from "square/tall". */
     .root {
+      position: relative;
+      isolation: isolate;       /* contain the .art-bg negative z-index */
       width: 100%;
       height: 100%;
       box-sizing: border-box;
@@ -34,7 +36,31 @@
       display: flex;
       gap: 12px;
       align-items: center;
+      overflow: hidden;         /* clip the bg blur halo to the cell */
     }
+
+    /* FLICKER TEST: re-introducing the album-art bg layer the way it
+       was in phase 8 — heavy filter chain (blur + brightness + saturate)
+       on an <img> whose src mirrors the foreground album art. If the
+       random flicker on the Edge comes back here, this is confirmed
+       the cause. Always shown (no iCUE option toggle) to isolate the
+       layer itself from the option-pipeline plumbing.
+       The .show class is toggled by setArt based on hasArt — when
+       there's no track, the bg fades out instead of showing a broken
+       image. */
+    .art-bg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: blur(36px) brightness(0.45) saturate(1.15);
+      pointer-events: none;
+      z-index: -1;
+      opacity: 0;
+      transition: opacity 350ms ease;
+    }
+    .art-bg.show { opacity: 0.95; }
     .root.size-wide {
       flex-direction: row;
       justify-content: flex-start;
@@ -317,6 +343,7 @@
 </head>
 <body>
   <main class="root size-vertical" id="root">
+    <img class="art-bg" id="artBg" alt="" aria-hidden="true">
     <img class="art empty" id="art" alt="">
     <div class="content">
       <div class="text">
@@ -395,6 +422,7 @@
 
     const rootEl = document.getElementById('root');
     const artEl = document.getElementById('art');
+    const artBgEl = document.getElementById('artBg');
     const titleEl = document.getElementById('title');
     const artistEl = document.getElementById('artist');
     const sourceEl = document.getElementById('source');
@@ -487,12 +515,18 @@
 
     function setArt(hasArt, version) {
       if (hasArt && version !== lastArtVersion) {
-        artEl.src = HOST + '/api/media/album-art?v=' + version;
+        const url = HOST + '/api/media/album-art?v=' + version;
+        artEl.src = url;
+        // Mirror the same URL into the bg layer. Browser caches the
+        // decoded bitmap once, both <img>s share it — no extra fetch.
+        artBgEl.src = url;
         lastArtVersion = version;
       }
       if (hasArt !== lastHasArt) {
         artEl.classList.toggle('empty', !hasArt);
         lastHasArt = hasArt;
+        // Show/hide the bg layer in lockstep with the foreground art.
+        artBgEl.classList.toggle('show', hasArt);
       }
     }
 
