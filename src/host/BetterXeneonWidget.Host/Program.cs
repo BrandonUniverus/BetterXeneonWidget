@@ -27,6 +27,11 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
+    // Layer in an optional appsettings.Local.json (gitignored) so a dev or
+    // an installed copy can supply secrets like Spotify:ClientId without
+    // touching the tracked appsettings.json.
+    builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+
     builder.Logging.AddProvider(fileLogger);
 
     var httpPort = builder.Configuration.GetValue<int?>("Listen:Port") ?? 8976;
