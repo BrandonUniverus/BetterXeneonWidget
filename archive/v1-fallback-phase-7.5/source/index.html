@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tr('Better Media v2')</title>
+  <link rel="icon" type="image/svg+xml" href="resources/icon.svg">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #0a0a0c;
+      color: #fff;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Layout switches between two flex orientations based on aspect ratio.
+       The classes (.size-wide / .size-vertical) are toggled by JS via a
+       ResizeObserver on .root — iCUE's QtWebEngine doesn't reliably fire
+       window.resize when the cell changes on the dashboard, so we observe
+       the element directly. Width-based breakpoints fail on Xeneon Edge
+       because Small horizontal (840×344) and Medium horizontal (840×696)
+       share width 840 with very different shapes — aspect ratio cleanly
+       separates "wide strip" from "square/tall". */
+    .root {
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      padding: 16px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .root.size-wide {
+      flex-direction: row;
+      justify-content: flex-start;
+    }
+    .root.size-vertical {
+      flex-direction: column;
+      justify-content: center;
+      text-align: center;
+    }
+
+    /* Art — same element, scales differently per layout. */
+    .art {
+      flex: 0 0 auto;
+      aspect-ratio: 1 / 1;
+      border-radius: 10px;
+      object-fit: cover;
+      background: #1c1c22;
+      display: block;
+    }
+    .root.size-wide .art {
+      height: 100%;
+      max-height: 100%;
+      width: auto;
+    }
+    .root.size-vertical .art {
+      width: min(28vmin, 140px);
+    }
+    .art.empty { visibility: hidden; }
+
+    /* Content column on the right in wide mode, full width in vertical.
+       flex:1 1 0 lets the lyrics inside it actually take available space
+       in wide mode without overflowing. */
+    .content {
+      flex: 1 1 0;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-self: stretch;
+      justify-content: center;
+    }
+    .root.size-vertical .content {
+      align-items: center;
+    }
+
+    .text {
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 0 0 auto;
+    }
+    .title {
+      font-size: clamp(16px, 3.5vmin, 26px);
+      font-weight: 700;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .artist {
+      font-size: clamp(12px, 2.4vmin, 18px);
+      font-weight: 500;
+      opacity: 0.75;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* Source line under artist — shows "Spotify · Album" when SMTC reports
+       Spotify, hidden otherwise (no flex room reserved when empty). */
+    .source {
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      opacity: 0.6;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      margin-top: 2px;
+    }
+    .root.size-vertical .source { justify-content: center; }
+    .source.empty { display: none; }
+    .source .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #1db954;
+      flex-shrink: 0;
+    }
+    .source .name {
+      font-weight: 700;
+      color: #1db954;
+    }
+    .source .album {
+      opacity: 0.85;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    /* Lyrics — fixed-position viewport, inner track translates via transform.
+       (See phase 6.1 commit message for the full rationale on why this
+       avoids the scrollTo preemption flicker.) */
+    .lyrics {
+      position: relative;
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
+      overflow: hidden;
+      font-size: clamp(13px, 2.4vmin, 18px);
+      line-height: 1.5;
+    }
+    .lyrics::before, .lyrics::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 18%;
+      pointer-events: none;
+      z-index: 2;
+    }
+    .lyrics::before {
+      top: 0;
+      background: linear-gradient(to bottom, #0a0a0c 0, transparent 100%);
+    }
+    .lyrics::after {
+      bottom: 0;
+      background: linear-gradient(to top, #0a0a0c 0, transparent 100%);
+    }
+    .lyrics .track {
+      transform: translateY(0);
+      transition: transform 350ms cubic-bezier(0.22, 0.61, 0.36, 1);
+      will-change: transform;
+      padding: 50% 0;
+      box-sizing: border-box;
+    }
+    .lyrics .line {
+      padding: 4px 8px;
+      opacity: 0.35;
+      color: #fff;
+      transition: opacity 250ms, color 250ms;
+    }
+    .root.size-vertical .lyrics .line { text-align: center; }
+    .lyrics .line.past { opacity: 0.4; }
+    .lyrics .line.current {
+      opacity: 1;
+      color: #1db954;
+      font-weight: 700;
+    }
+    .lyrics.empty { display: none; }
+    .lyrics-fallback {
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      opacity: 0.4;
+    }
+    .lyrics-fallback.hidden { display: none; }
+
+    /* Progress bar */
+    .progress {
+      width: 100%;
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 4px;
+      flex: 0 0 auto;
+    }
+    .progress .track {
+      height: 4px;
+      background: #2a2a32;
+      border-radius: 2px;
+      overflow: hidden;
+      position: relative;
+    }
+    .progress .fill {
+      position: absolute;
+      inset: 0;
+      background: #1db954;
+      transform-origin: left center;
+      transform: scaleX(0);
+      will-change: transform;
+    }
+    .progress .times {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      opacity: 0.6;
+    }
+
+    /* Transport — spans the full content width. Buttons are spread evenly
+       so the row visually balances regardless of how wide the content
+       column ends up (wide-strip vs vertical). */
+    .transport {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex: 0 0 auto;
+      width: 100%;
+      justify-content: space-between;
+    }
+    .t-btn {
+      flex: 1 1 0;
+      min-width: 0;
+      height: clamp(44px, 7.5vmin, 60px);
+      border-radius: 999px;
+      border: none;
+      background: #1c1c22;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 80ms;
+    }
+    .t-btn:hover { background: #2a2a32; }
+    .t-btn:active { background: #2a2a32; }
+    .t-btn:disabled { opacity: 0.3; cursor: default; }
+    .t-btn svg {
+      width: 30%;
+      max-width: 24px;
+      max-height: 24px;
+      pointer-events: none;
+      fill: currentColor;
+    }
+    .t-btn.center {
+      background: #1db954;
+      color: #08130c;
+    }
+    /* Connect/Playlists slot — Spotify-green tinted to match the source
+       chip color, but a subtler treatment than the play button. */
+    .t-btn.lib {
+      color: #1db954;
+    }
+
+    .phase {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      opacity: 0.45;
+      text-transform: uppercase;
+      flex: 0 0 auto;
+    }
+    .pulse {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #1db954;
+      margin-right: 8px;
+      vertical-align: middle;
+      transition: opacity 200ms;
+      opacity: 0.25;
+    }
+    .pulse.live { opacity: 1; }
+    .err { color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <main class="root size-vertical" id="root">
+    <img class="art empty" id="art" alt="">
+    <div class="content">
+      <div class="text">
+        <div class="title" id="title">Connecting…</div>
+        <div class="artist" id="artist"></div>
+        <div class="source empty" id="source">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="name">Spotify</span>
+          <span aria-hidden="true">·</span>
+          <span class="album" id="sourceAlbum"></span>
+        </div>
+      </div>
+      <div class="lyrics empty" id="lyrics"></div>
+      <div class="lyrics-fallback hidden" id="lyricsFallback">no synced lyrics</div>
+      <div class="progress">
+        <div class="track"><div class="fill" id="fill"></div></div>
+        <div class="times"><span id="curTime">0:00</span><span id="totTime">0:00</span></div>
+      </div>
+      <div class="transport">
+        <button class="t-btn" id="prevBtn" type="button" aria-label="Previous track" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 5h2v14H6zM10 12l9-7v14z"/>
+          </svg>
+        </button>
+        <button class="t-btn center" id="toggleBtn" type="button" aria-label="Play" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true" id="toggleIcon">
+            <path d="M7 5l13 7-13 7z"/>
+          </svg>
+        </button>
+        <button class="t-btn" id="nextBtn" type="button" aria-label="Next track" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 5l9 7-9 7zM16 5h2v14h-2z"/>
+          </svg>
+        </button>
+        <!-- Slot 4: Playlists when authed, Connect when not. Same shape so
+             the layout doesn't shift when auth flips. id stays stable;
+             we swap the inner SVG + aria-label + click handler. -->
+        <button class="t-btn lib" id="libBtn" type="button" aria-label="Connect Spotify">
+          <svg viewBox="0 0 24 24" aria-hidden="true" id="libIcon">
+            <!-- Default = Spotify wordmark icon (Connect) -->
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>
+          </svg>
+        </button>
+      </div>
+      <div class="phase">
+        <span class="pulse" id="pulse"></span><span id="status">media v2 · phase 7.5</span>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    // Phase 7 goal: aspect-ratio responsive layout. ResizeObserver toggles
+    // .size-wide vs .size-vertical on the root element. Same DOM, just two
+    // flex orientations. Layout calculation is async and frame-batched, so
+    // the lyrics translateY math (which reads lyricsEl.clientHeight) keeps
+    // working — clientHeight reflects the actual rendered viewport.
+
+    const HOST = 'http://127.0.0.1:8976';
+    const POLL_MS = 1500;
+    const TICK_MS = 200;
+    const SEEK_THRESHOLD_FORWARD = 2500;
+    const SEEK_THRESHOLD_BACKWARD = 2000;
+    // Aspect-ratio threshold separating wide-strip from square/tall.
+    // Edge cell aspect ratios from the kit:
+    //   Small horizontal:  840×344 = 2.44 → wide
+    //   Medium horizontal: 840×696 = 1.21 → vertical
+    //   Large horizontal:  1688×696 = 2.43 → wide
+    //   X-Large horizontal:2536×696 = 3.64 → wide
+    //   Small vertical:    696×416 = 1.67 → vertical
+    //   Medium vertical:   696×840 = 0.83 → vertical
+    //   Large vertical:    696×1688 = 0.41 → vertical
+    //   X-Large vertical:  696×2536 = 0.27 → vertical
+    // 2.0 cleanly separates the four wide cells from the four other ones.
+    const WIDE_ASPECT_THRESHOLD = 2.0;
+
+    const rootEl = document.getElementById('root');
+    const artEl = document.getElementById('art');
+    const titleEl = document.getElementById('title');
+    const artistEl = document.getElementById('artist');
+    const sourceEl = document.getElementById('source');
+    const sourceAlbumEl = document.getElementById('sourceAlbum');
+    const lyricsEl = document.getElementById('lyrics');
+    const lyricsFallbackEl = document.getElementById('lyricsFallback');
+    const prevBtn = document.getElementById('prevBtn');
+    const toggleBtn = document.getElementById('toggleBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const libBtn = document.getElementById('libBtn');
+    const toggleIcon = document.getElementById('toggleIcon');
+    const libIcon = document.getElementById('libIcon');
+    const fillEl = document.getElementById('fill');
+    const curTimeEl = document.getElementById('curTime');
+    const totTimeEl = document.getElementById('totTime');
+    const pulseEl = document.getElementById('pulse');
+    const statusEl = document.getElementById('status');
+
+    const PLAY_PATH = 'M7 5l13 7-13 7z';
+    const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
+
+    let lastTitle = null;
+    let lastArtist = null;
+    let lastArtVersion = -1;
+    let lastHasArt = null;
+    let lastIsPlaying = null;
+    let lastCanPrev = null;
+    let lastCanNext = null;
+    let lastCanToggle = null;
+    let lastCurTime = null;
+    let lastTotTime = null;
+    let lastFillRatio = -1;
+    let lastSourceVisible = null;     // bool: should the source line show?
+    let lastSourceAlbum = null;       // string we last wrote to .album
+    let lastLibMode = null;           // 'connect' | 'playlists'
+    let pulseTimeout = null;
+
+    let anchorPosMs = 0;
+    let anchorAt = 0;
+    let durationMs = 0;
+    let isPlaying = false;
+    let lastTrackKey = '';
+    let spotifyAuthed = false;
+
+    let parsedLyrics = [];
+    let lyricLineEls = [];
+    let lyricsTrackEl = null;
+    let currentLineIdx = -1;
+    let lyricsFetchKey = '';
+
+    const inFlight = { prev: false, toggle: false, next: false };
+
+    // --- Layout: aspect-ratio observer ----------------------------------
+    let lastIsWide = null;
+    function applyLayout(width, height) {
+      if (width <= 0 || height <= 0) return;
+      const aspect = width / height;
+      const isWide = aspect >= WIDE_ASPECT_THRESHOLD;
+      if (isWide === lastIsWide) return;
+      lastIsWide = isWide;
+      rootEl.classList.toggle('size-wide', isWide);
+      rootEl.classList.toggle('size-vertical', !isWide);
+      // After a layout swap, the lyrics viewport height changes — re-apply
+      // the current line's translateY so it stays centered.
+      if (lyricsTrackEl && currentLineIdx >= 0 && lyricLineEls[currentLineIdx]) {
+        const lineEl = lyricLineEls[currentLineIdx];
+        const containerH = lyricsEl.clientHeight;
+        const lineCenter = lineEl.offsetTop + lineEl.offsetHeight / 2;
+        const offset = containerH / 2 - lineCenter;
+        // Disable transition for the layout-swap snap so it doesn't
+        // animate from the old position.
+        const prevTransition = lyricsTrackEl.style.transition;
+        lyricsTrackEl.style.transition = 'none';
+        lyricsTrackEl.style.transform = 'translateY(' + offset.toFixed(1) + 'px)';
+        requestAnimationFrame(() => {
+          if (lyricsTrackEl) lyricsTrackEl.style.transition = prevTransition;
+        });
+      }
+    }
+    new ResizeObserver(entries => {
+      for (const entry of entries) {
+        applyLayout(entry.contentRect.width, entry.contentRect.height);
+      }
+    }).observe(rootEl);
+    applyLayout(rootEl.clientWidth, rootEl.clientHeight);
+
+    function setText(el, value) {
+      if (el.textContent !== value) el.textContent = value;
+    }
+
+    function setArt(hasArt, version) {
+      if (hasArt && version !== lastArtVersion) {
+        artEl.src = HOST + '/api/media/album-art?v=' + version;
+        lastArtVersion = version;
+      }
+      if (hasArt !== lastHasArt) {
+        artEl.classList.toggle('empty', !hasArt);
+        lastHasArt = hasArt;
+      }
+    }
+
+    function setToggleState(playing, canToggle) {
+      if (playing !== lastIsPlaying) {
+        toggleIcon.firstElementChild.setAttribute('d', playing ? PAUSE_PATH : PLAY_PATH);
+        toggleBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+        lastIsPlaying = playing;
+      }
+      if (canToggle !== lastCanToggle) {
+        toggleBtn.disabled = !canToggle;
+        lastCanToggle = canToggle;
+      }
+    }
+
+    function setBtnEnabled(btn, enabled, lastVar) {
+      if (enabled !== lastVar) btn.disabled = !enabled;
+      return enabled;
+    }
+
+    // Source line — shows "Spotify · <album>" under the artist when SMTC
+    // reports Spotify is the source. Hidden otherwise (no flex room).
+    function setSource(isSpotify, album) {
+      const visible = !!isSpotify;
+      if (visible !== lastSourceVisible) {
+        sourceEl.classList.toggle('empty', !visible);
+        lastSourceVisible = visible;
+      }
+      if (!visible) return;
+      const a = album || '';
+      if (a !== lastSourceAlbum) {
+        sourceAlbumEl.textContent = a;
+        lastSourceAlbum = a;
+      }
+    }
+
+    // Library/Connect slot. Authed → Playlists icon (opens library — wired
+    // up later), unauthed → Spotify wordmark (initiates OAuth). Same button
+    // element so layout doesn't shift on the auth flip.
+    const PLAYLISTS_SVG =
+      '<line x1="8" y1="6" x2="21" y2="6"/>' +
+      '<line x1="8" y1="12" x2="21" y2="12"/>' +
+      '<line x1="8" y1="18" x2="21" y2="18"/>' +
+      '<line x1="3" y1="6" x2="3.01" y2="6"/>' +
+      '<line x1="3" y1="12" x2="3.01" y2="12"/>' +
+      '<line x1="3" y1="18" x2="3.01" y2="18"/>';
+    const CONNECT_SVG =
+      '<circle cx="12" cy="12" r="10"/>' +
+      '<path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>';
+    function setLibMode(authed) {
+      const mode = authed ? 'playlists' : 'connect';
+      if (mode === lastLibMode) return;
+      lastLibMode = mode;
+      if (authed) {
+        libIcon.innerHTML = PLAYLISTS_SVG;
+        libIcon.setAttribute('fill', 'none');
+        libIcon.setAttribute('stroke', 'currentColor');
+        libIcon.setAttribute('stroke-width', '2');
+        libIcon.setAttribute('stroke-linecap', 'round');
+        libIcon.setAttribute('stroke-linejoin', 'round');
+        libBtn.setAttribute('aria-label', 'Open Playlists');
+      } else {
+        libIcon.innerHTML = CONNECT_SVG;
+        libIcon.setAttribute('fill', 'currentColor');
+        libIcon.removeAttribute('stroke');
+        libIcon.removeAttribute('stroke-width');
+        libIcon.removeAttribute('stroke-linecap');
+        libIcon.removeAttribute('stroke-linejoin');
+        libBtn.setAttribute('aria-label', 'Connect Spotify');
+      }
+    }
+
+    function flashPulse() {
+      pulseEl.classList.add('live');
+      if (pulseTimeout) clearTimeout(pulseTimeout);
+      pulseTimeout = setTimeout(() => pulseEl.classList.remove('live'), 250);
+    }
+
+    async function postAction(path, key) {
+      if (inFlight[key]) return;
+      inFlight[key] = true;
+      try { await fetch(HOST + path, { method: 'POST' }); }
+      catch { /* surfaced by next poll's status */ }
+      finally { inFlight[key] = false; }
+    }
+
+    prevBtn.addEventListener('click', () => postAction('/api/media/previous', 'prev'));
+    toggleBtn.addEventListener('click', () => postAction('/api/media/toggle', 'toggle'));
+    nextBtn.addEventListener('click', () => postAction('/api/media/next', 'next'));
+    libBtn.addEventListener('click', async () => {
+      if (lastLibMode === 'connect') {
+        // POST /api/spotify/connect — host opens the user's default browser
+        // to the Spotify auth URL via the betterxeneonwidget:// scheme.
+        try { await fetch(HOST + '/api/spotify/connect', { method: 'POST' }); }
+        catch { /* surfaced by next poll's status */ }
+      } else {
+        // Playlists modal — not yet implemented in v2 (planned: phase 8).
+      }
+    });
+
+    function fmtTime(ms) {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      const m = Math.floor(s / 60);
+      const r = s - m * 60;
+      return m + ':' + (r < 10 ? '0' : '') + r;
+    }
+
+    function currentPosition() {
+      if (anchorAt === 0) return 0;
+      const elapsed = isPlaying ? Math.max(0, performance.now() - anchorAt) : 0;
+      const pos = anchorPosMs + elapsed;
+      return durationMs > 0 ? Math.min(pos, durationMs) : pos;
+    }
+
+    // --- LRC parser + marker insertion (ported from main) ---------------
+    function parseLrc(text) {
+      const out = [];
+      const stampRe = /\[(\d+):(\d+)(?:\.(\d+))?\]/g;
+      for (const raw of text.split('\n')) {
+        const stamps = [];
+        let lastIdx = 0;
+        let m;
+        stampRe.lastIndex = 0;
+        while ((m = stampRe.exec(raw)) !== null) {
+          const minutes = parseInt(m[1], 10);
+          const seconds = parseInt(m[2], 10);
+          const fracStr = m[3] || '0';
+          const frac = fracStr.length === 3 ? parseInt(fracStr, 10) : parseInt(fracStr, 10) * 10;
+          stamps.push((minutes * 60 + seconds) * 1000 + frac);
+          lastIdx = m.index + m[0].length;
+        }
+        const lineText = raw.slice(lastIdx).trim();
+        if (stamps.length === 0 || !lineText) continue;
+        for (const ms of stamps) out.push({ ms, text: lineText });
+      }
+      out.sort((a, b) => a.ms - b.ms);
+      return out;
+    }
+    function estimateLineDurationMs(text, gapMs) {
+      const chars = text.replace(/\s+/g, ' ').trim().length;
+      const naive = Math.max(1500, chars * 280);
+      return Math.min(naive, Math.max(1500, gapMs * 0.9));
+    }
+    function isExistingMarker(text) {
+      if (/^[\s♪-♯]+$/.test(text)) return true;
+      return /^\(?\s*(instrumental|interlude|music|guitar solo|outro|intro)\s*\)?$/i.test(text);
+    }
+    function addInstrumentalMarkers(lines, songDurationMs) {
+      if (lines.length === 0) return lines;
+      const NOTE = '♪';
+      const SILENCE_THRESHOLD_MS = 8000;
+      const SPACING_MS = 8000;
+      const LEAD_MS = 1000;
+      const TAIL_MS = 1500;
+      const out = [];
+      const insertGap = (start, end) => {
+        if (end - start < SILENCE_THRESHOLD_MS) return;
+        let t = start + LEAD_MS;
+        while (t + 250 < end - TAIL_MS) {
+          out.push({ ms: t, text: NOTE });
+          t += SPACING_MS;
+        }
+      };
+      insertGap(0, lines[0].ms);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        out.push(line);
+        const next = lines[i + 1];
+        if (!next) {
+          if (songDurationMs > 0) {
+            const trailingGap = songDurationMs - line.ms;
+            const sungEnds = line.ms + estimateLineDurationMs(line.text, trailingGap);
+            insertGap(sungEnds, songDurationMs);
+          }
+          break;
+        }
+        if (isExistingMarker(line.text) || isExistingMarker(next.text)) continue;
+        const gap = next.ms - line.ms;
+        const sungEnds = line.ms + estimateLineDurationMs(line.text, gap);
+        insertGap(sungEnds, next.ms);
+      }
+      out.sort((a, b) => a.ms - b.ms);
+      return out;
+    }
+
+    function clearLyrics() {
+      parsedLyrics = [];
+      lyricLineEls = [];
+      lyricsTrackEl = null;
+      currentLineIdx = -1;
+      lyricsEl.textContent = '';
+      lyricsEl.classList.add('empty');
+    }
+
+    function renderLyrics(lines) {
+      const track = document.createElement('div');
+      track.className = 'track';
+      track.style.transition = 'none';
+      lyricLineEls = [];
+      for (let i = 0; i < lines.length; i++) {
+        const div = document.createElement('div');
+        div.className = 'line';
+        div.textContent = lines[i].text;
+        track.appendChild(div);
+        lyricLineEls.push(div);
+      }
+      lyricsEl.textContent = '';
+      lyricsEl.appendChild(track);
+      lyricsTrackEl = track;
+      requestAnimationFrame(() => {
+        if (lyricsTrackEl === track) track.style.transition = '';
+      });
+      lyricsEl.classList.remove('empty');
+    }
+
+    async function fetchLyricsFor(artist, title, album) {
+      const key = artist + '|' + title;
+      if (key === lyricsFetchKey) return;
+      lyricsFetchKey = key;
+      clearLyrics();
+      lyricsFallbackEl.classList.add('hidden');
+      try {
+        const url = HOST + '/api/lyrics?artist=' + encodeURIComponent(artist) +
+          '&title=' + encodeURIComponent(title) +
+          (album ? '&album=' + encodeURIComponent(album) : '');
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (key !== lyricsFetchKey) return;
+        if (data.found && data.syncedLyrics) {
+          const raw = parseLrc(data.syncedLyrics);
+          parsedLyrics = addInstrumentalMarkers(raw, durationMs);
+          renderLyrics(parsedLyrics);
+          lyricsFallbackEl.classList.add('hidden');
+        } else {
+          lyricsFallbackEl.classList.remove('hidden');
+        }
+      } catch {
+        lyricsFallbackEl.classList.remove('hidden');
+      }
+    }
+
+    function updateCurrentLine(pos) {
+      if (parsedLyrics.length === 0 || !lyricsTrackEl) return;
+      let idx = currentLineIdx;
+      while (idx + 1 < parsedLyrics.length && parsedLyrics[idx + 1].ms <= pos) idx++;
+      while (idx >= 0 && parsedLyrics[idx].ms > pos) idx--;
+      if (idx === currentLineIdx) return;
+
+      if (currentLineIdx >= 0 && lyricLineEls[currentLineIdx]) {
+        lyricLineEls[currentLineIdx].classList.remove('current');
+        lyricLineEls[currentLineIdx].classList.add('past');
+      }
+      if (idx >= 0 && lyricLineEls[idx]) {
+        lyricLineEls[idx].classList.remove('past');
+        lyricLineEls[idx].classList.add('current');
+        const lineEl = lyricLineEls[idx];
+        const containerH = lyricsEl.clientHeight;
+        const lineCenter = lineEl.offsetTop + lineEl.offsetHeight / 2;
+        const offset = containerH / 2 - lineCenter;
+        lyricsTrackEl.style.transform = 'translateY(' + offset.toFixed(1) + 'px)';
+      }
+      currentLineIdx = idx;
+    }
+
+    function tick() {
+      const pos = currentPosition();
+      const ratio = durationMs > 0 ? pos / durationMs : 0;
+      const clamped = Math.max(0, Math.min(1, ratio));
+      if (Math.abs(clamped - lastFillRatio) > 0.001) {
+        fillEl.style.transform = 'scaleX(' + clamped.toFixed(4) + ')';
+        lastFillRatio = clamped;
+      }
+      const cur = fmtTime(pos);
+      const tot = fmtTime(durationMs);
+      if (cur !== lastCurTime) { setText(curTimeEl, cur); lastCurTime = cur; }
+      if (tot !== lastTotTime) { setText(totTimeEl, tot); lastTotTime = tot; }
+      updateCurrentLine(pos);
+    }
+
+    async function pollOnce() {
+      try {
+        const [npRes, ssRes] = await Promise.all([
+          fetch(HOST + '/api/media/now-playing'),
+          fetch(HOST + '/api/spotify/status'),
+        ]);
+        if (!npRes.ok) throw new Error('now-playing HTTP ' + npRes.status);
+        if (!ssRes.ok) throw new Error('spotify/status HTTP ' + ssRes.status);
+        const np = await npRes.json();
+        const ss = await ssRes.json();
+
+        spotifyAuthed = !!ss.connected;
+        setLibMode(spotifyAuthed);
+
+        if (spotifyAuthed) {
+          try {
+            const pbRes = await fetch(HOST + '/api/spotify/playback');
+            if (pbRes.ok) await pbRes.json();
+          } catch { /* non-fatal */ }
+        }
+
+        const title = np.hasSession ? (np.title || 'Unknown title') : 'Nothing playing';
+        const artist = np.hasSession ? (np.artist || '') : '';
+        if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
+        if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
+        // Source line: visible only when Spotify is the SMTC source.
+        // (Other sources just don't show this line — title/artist alone is
+        // enough for non-Spotify SMTC playback.)
+        setSource(!!np.isSpotify && !!np.hasSession, np.album || '');
+        setArt(!!np.hasArt && !!np.hasSession, np.artVersion ?? 0);
+
+        const playing = np.status === 'Playing';
+        isPlaying = playing;
+        const canToggle = !!(np.canPlay || np.canPause);
+        setToggleState(playing, canToggle);
+        lastCanPrev = setBtnEnabled(prevBtn, !!np.canGoPrevious, lastCanPrev);
+        lastCanNext = setBtnEnabled(nextBtn, !!np.canGoNext, lastCanNext);
+
+        const serverPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
+        durationMs = typeof np.durationMs === 'number' ? np.durationMs : 0;
+        const trackKey = (np.title || '') + '|' + (np.artist || '');
+        const now = performance.now();
+        const trackChanged = trackKey !== lastTrackKey;
+        if (anchorAt === 0 || trackChanged) {
+          anchorPosMs = serverPos;
+          anchorAt = now;
+          lastTrackKey = trackKey;
+        } else {
+          const localExtrap = isPlaying ? anchorPosMs + (now - anchorAt) : anchorPosMs;
+          const delta = serverPos - localExtrap;
+          if (delta > SEEK_THRESHOLD_FORWARD || delta < -SEEK_THRESHOLD_BACKWARD) {
+            anchorPosMs = serverPos;
+            anchorAt = now;
+          }
+        }
+
+        if (trackChanged && np.hasSession && artist && title) {
+          fetchLyricsFor(artist, title, np.album || '');
+        } else if (!np.hasSession) {
+          clearLyrics();
+          lyricsFallbackEl.classList.add('hidden');
+        }
+
+        statusEl.classList.remove('err');
+        statusEl.textContent = 'media v2 · phase 7.5';
+        flashPulse();
+      } catch (e) {
+        statusEl.classList.add('err');
+        statusEl.textContent = 'host offline · ' + (e.message || 'unknown error');
+      }
+    }
+
+    artEl.addEventListener('error', () => {
+      artEl.classList.add('empty');
+      lastHasArt = false;
+    });
+
+    pollOnce();
+    setInterval(pollOnce, POLL_MS);
+    setInterval(tick, TICK_MS);
+  </script>
+</body>
+</html>
