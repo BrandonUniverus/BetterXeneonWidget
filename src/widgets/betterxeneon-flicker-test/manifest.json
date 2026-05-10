@@ -2,7 +2,7 @@
   "author": "Brandon Bachmeier",
   "id": "com.betterxeneon.flickertest",
   "name": "Flicker Test",
-  "description": "Diagnostic 4-cell bisect grid (phase 3 — killer combo). T1: pure CSS spin (control). T2: background-image URL swap @ 1.5s on a div with filter:blur(40px)+brightness+saturate AND transform:scale(1.2) — exactly mimics production .art-bg. T3: backdrop-filter over moving content. T4: plain <img> URL swap @ 1.5s (no filter, control). T2 vs T4 isolates whether it's the URL swap or the filter-on-bg-image combo that flickers.",
+  "description": "Diagnostic 5-cell bisect grid (phase 4). T1: pure CSS spin (control). T2: bg-image URL swap @ 1.5s on a div with blur(40px)+brightness+saturate+scale(1.2) — exactly mimics production .art-bg. T3: backdrop-filter over moving content. T4: plain <img> URL swap @ 1.5s (no filter, control). T5: bg-image URL swap on a div with box-shadow + border-radius — exactly mimics production foreground .art. T5 isolates whether bg-image swap with shadow rendering is the trigger we missed in T4.",
   "version": "0.1.0",
   "preview_icon": "resources/icon.svg",
   "min_framework_version": "1.0.1",

@@ -20,12 +20,15 @@
       width: 100%;
       height: 100%;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr;
       grid-template-rows: 1fr 1fr;
       gap: 4px;
       padding: 4px;
       box-sizing: border-box;
     }
+    /* The 6th slot in the 3x2 grid is intentionally empty — leaves room
+       for a future test without forcing layout reflow. */
+    .cell.empty { background: transparent; }
     .cell {
       position: relative;
       border-radius: 12px;
@@ -122,6 +125,25 @@
       border-radius: 8px;
       transition: opacity 200ms;
     }
+
+    /* T5 — production foreground .art combo: background-image URL swap on
+       a div WITH box-shadow + border-radius + contain. Only thing T4
+       (plain <img>) didn't capture. background-image URL swap has a
+       different rasterization path than <img>; combined with a heavy
+       box-shadow that the engine has to recompose around the rounded
+       corners on every paint, this could produce the production scanline
+       artifact. */
+    .bg-shadow-cell { background: #1c1c22; }
+    .bg-shadow-cell .swap-bg {
+      width: 70%;
+      height: 70%;
+      background-size: cover;
+      background-position: center;
+      background-color: #2a2a32;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+      contain: layout style;
+    }
   </style>
 </head>
 <body>
@@ -147,6 +169,13 @@
       <span class="label">T4 · &lt;img&gt; URL swap @ 1.5s (album-art change)</span>
       <img class="swap-img" id="swapImg" alt="">
     </div>
+
+    <div class="cell bg-shadow-cell">
+      <span class="label">T5 · bg-image URL swap + box-shadow (mimics fg .art)</span>
+      <div class="swap-bg" id="swapBg"></div>
+    </div>
+
+    <div class="cell empty" aria-hidden="true"></div>
   </div>
 
   <script type="module">
@@ -174,15 +203,18 @@
     }
 
     var arts = [makeArt(140), makeArt(260), makeArt(20)];
-    var img = document.getElementById('swapImg');
-    var blurredBg = document.getElementById('blurredBg');
+    var img = document.getElementById('swapImg');           // T4
+    var blurredBg = document.getElementById('blurredBg');   // T2
+    var swapBg = document.getElementById('swapBg');         // T5
     var i = 0;
     img.src = arts[0];
     blurredBg.style.backgroundImage = 'url("' + arts[0] + '")';
+    swapBg.style.backgroundImage = 'url("' + arts[0] + '")';
     setInterval(function () {
       i = (i + 1) % arts.length;
       img.src = arts[i];
       blurredBg.style.backgroundImage = 'url("' + arts[i] + '")';
+      swapBg.style.backgroundImage = 'url("' + arts[i] + '")';
     }, 1500);
   </script>
 </body>
