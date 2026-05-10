@@ -2,7 +2,7 @@
   "author": "Brandon Bachmeier",
   "id": "com.betterxeneon.media.v2",
   "name": "Better Media v2",
-  "description": "Phase 5 — adds the Spotify Web API polling path. /api/spotify/status checked each 1.5s tick (parallel with SMTC); /api/spotify/playback fetched when authed; /api/spotify/queue fetched every 6s. Adds a 'Spotify' badge to the status line and an 'Up next' label when a queue is available. No buttons for Connect/Library yet.",
+  "description": "Phase 6 — adds the lyrics list. Fetches synced lyrics from LRClib via the host on track change, parses the LRC, inserts ♪ markers in instrumental gaps, renders all lines as DOM, and on every 200ms tick computes the current line + smooth-scrolls it into view. This is the heaviest DOM phase — many <div> children + per-tick class swaps + smooth scrollTo.",
   "version": "0.1.0",
   "preview_icon": "resources/icon.svg",
   "min_framework_version": "1.0.1",
