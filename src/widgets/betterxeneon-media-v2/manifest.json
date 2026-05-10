@@ -1,0 +1,16 @@
+{
+  "author": "Brandon Bachmeier",
+  "id": "com.betterxeneon.media.v2",
+  "name": "Better Media v2",
+  "description": "Phase 0 — empty baseline. No polling, no fetch, no JS. Just a centered 'Now Playing' label rendered with CSS. Installs alongside the original Better Media so you can compare flicker behavior side-by-side.",
+  "version": "0.1.0",
+  "preview_icon": "resources/icon.svg",
+  "min_framework_version": "1.0.1",
+  "os": [
+    { "platform": "windows" }
+  ],
+  "supported_devices": [
+    { "type": "dashboard_lcd" }
+  ],
+  "interactive": false
+}
