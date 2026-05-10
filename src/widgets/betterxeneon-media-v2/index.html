@@ -926,6 +926,14 @@
 
     async function pollOnce() {
       try {
+        // Bracket the SMTC fetch so we can measure round-trip and
+        // compensate the position anchor for one-way transit. Without
+        // this the lyric highlighter is consistently behind the audio
+        // by ~25-50ms because the host's "current position" was
+        // computed at the moment IT serialized the response, not at
+        // the moment we received it. Half-roundtrip is the best
+        // estimate of one-way latency without server-clock alignment.
+        const fetchStart = performance.now();
         const [npRes, ssRes] = await Promise.all([
           fetch(HOST + '/api/media/now-playing'),
           fetch(HOST + '/api/spotify/status'),
@@ -934,6 +942,8 @@
         if (!ssRes.ok) throw new Error('spotify/status HTTP ' + ssRes.status);
         const np = await npRes.json();
         const ss = await ssRes.json();
+        const fetchEnd = performance.now();
+        const halfRoundTrip = (fetchEnd - fetchStart) / 2;
 
         spotifyAuthed = !!ss.connected;
         setLibMode(spotifyAuthed);
@@ -962,10 +972,18 @@
         lastCanPrev = setBtnEnabled(prevBtn, !!np.canGoPrevious, lastCanPrev);
         lastCanNext = setBtnEnabled(nextBtn, !!np.canGoNext, lastCanNext);
 
-        const serverPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
+        // Position anchor. np.positionMs was the host's best estimate
+        // of "current position" at the moment IT serialized the
+        // response. We received that response halfRoundTrip ms later,
+        // so the position has actually advanced by that much (assuming
+        // playing). Bake the latency compensation into anchorPosMs so
+        // the local extrapolation uses an anchor that's aligned with
+        // performance.now() = fetchEnd.
+        const rawServerPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
+        const serverPos = isPlaying ? rawServerPos + halfRoundTrip : rawServerPos;
         durationMs = typeof np.durationMs === 'number' ? np.durationMs : 0;
         const trackKey = (np.title || '') + '|' + (np.artist || '');
-        const now = performance.now();
+        const now = fetchEnd;
         const trackChanged = trackKey !== lastTrackKey;
         if (anchorAt === 0 || trackChanged) {
           anchorPosMs = serverPos;
