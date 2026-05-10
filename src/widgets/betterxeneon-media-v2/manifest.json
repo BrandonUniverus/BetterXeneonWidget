@@ -2,7 +2,7 @@
   "author": "Brandon Bachmeier",
   "id": "com.betterxeneon.media.v2",
   "name": "Better Media v2",
-  "description": "Phase 6.1 — lyrics list with transform-based scroll. Fixes the per-line flicker from phase 6 by replacing scrollTo({behavior:smooth}) (preempted on every tick) and mask-image (forces re-rasterization) with translateY transforms on an inner track + static gradient overlays.",
+  "description": "Phase 7 — aspect-ratio responsive layout. ResizeObserver on the root element switches between 'wide' (aspect >= 2.0: art left, metadata+lyrics+progress+transport right) and 'vertical' (aspect < 2.0: stacked column). Same content in both, just rearranged via CSS classes.",
   "version": "0.1.0",
   "preview_icon": "resources/icon.svg",
   "min_framework_version": "1.0.1",

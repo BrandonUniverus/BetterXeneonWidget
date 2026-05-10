@@ -17,34 +17,76 @@
       font-family: system-ui, -apple-system, sans-serif;
       -webkit-font-smoothing: antialiased;
     }
+
+    /* Layout switches between two flex orientations based on aspect ratio.
+       The classes (.size-wide / .size-vertical) are toggled by JS via a
+       ResizeObserver on .root — iCUE's QtWebEngine doesn't reliably fire
+       window.resize when the cell changes on the dashboard, so we observe
+       the element directly. Width-based breakpoints fail on Xeneon Edge
+       because Small horizontal (840×344) and Medium horizontal (840×696)
+       share width 840 with very different shapes — aspect ratio cleanly
+       separates "wide strip" from "square/tall". */
     .root {
       width: 100%;
       height: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      padding: 16px;
       box-sizing: border-box;
+      padding: 16px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .root.size-wide {
+      flex-direction: row;
+      justify-content: flex-start;
+    }
+    .root.size-vertical {
+      flex-direction: column;
+      justify-content: center;
       text-align: center;
     }
+
+    /* Art — same element, scales differently per layout. */
     .art {
-      width: min(28vmin, 140px);
-      aspect-ratio: 1 / 1;
       flex: 0 0 auto;
+      aspect-ratio: 1 / 1;
       border-radius: 10px;
       object-fit: cover;
       background: #1c1c22;
       display: block;
     }
+    .root.size-wide .art {
+      height: 100%;
+      max-height: 100%;
+      width: auto;
+    }
+    .root.size-vertical .art {
+      width: min(28vmin, 140px);
+    }
     .art.empty { visibility: hidden; }
+
+    /* Content column on the right in wide mode, full width in vertical.
+       flex:1 1 0 lets the lyrics inside it actually take available space
+       in wide mode without overflowing. */
+    .content {
+      flex: 1 1 0;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-self: stretch;
+      justify-content: center;
+    }
+    .root.size-vertical .content {
+      align-items: center;
+    }
+
     .text {
       max-width: 100%;
       display: flex;
       flex-direction: column;
-      align-items: center;
       gap: 2px;
+      flex: 0 0 auto;
     }
     .title {
       font-size: clamp(16px, 3.5vmin, 26px);
@@ -65,18 +107,12 @@
     }
 
     /* Lyrics — fixed-position viewport, inner track translates via transform.
-       Browser scrollTo({behavior:'smooth'}) was being preempted on every
-       tick (since we re-call it before the previous animation finishes),
-       which made the engine cancel + restart and produced visible flicker.
-       transform on a child is composite-only AND CSS transitions can be
-       redirected mid-animation without a restart. Mask-image was also
-       removed — masks force re-rasterization on the masked area each
-       repaint, which compounds the problem. The fade is now a static
-       overlay (.lyrics::before/::after) instead. */
+       (See phase 6.1 commit message for the full rationale on why this
+       avoids the scrollTo preemption flicker.) */
     .lyrics {
       position: relative;
       flex: 1 1 auto;
-      width: 90%;
+      width: 100%;
       min-height: 0;
       overflow: hidden;
       font-size: clamp(13px, 2.4vmin, 18px);
@@ -100,7 +136,6 @@
       background: linear-gradient(to top, #0a0a0c 0, transparent 100%);
     }
     .lyrics .track {
-      /* Translated each line change. Transition on transform = GPU-only. */
       transform: translateY(0);
       transition: transform 350ms cubic-bezier(0.22, 0.61, 0.36, 1);
       will-change: transform;
@@ -113,6 +148,7 @@
       color: #fff;
       transition: opacity 250ms, color 250ms;
     }
+    .root.size-vertical .lyrics .line { text-align: center; }
     .lyrics .line.past { opacity: 0.4; }
     .lyrics .line.current {
       opacity: 1;
@@ -133,8 +169,8 @@
 
     /* Progress bar */
     .progress {
-      width: min(60vmin, 320px);
-      max-width: 90%;
+      width: 100%;
+      max-width: 100%;
       display: flex;
       flex-direction: column;
       align-items: stretch;
@@ -170,6 +206,8 @@
       align-items: center;
       flex: 0 0 auto;
     }
+    .root.size-vertical .transport { justify-content: center; }
+    .root.size-wide .transport { justify-content: flex-start; }
     .t-btn {
       width: clamp(40px, 7vmin, 56px);
       height: clamp(40px, 7vmin, 56px);
@@ -236,54 +274,68 @@
   </style>
 </head>
 <body>
-  <div class="root">
+  <main class="root size-vertical" id="root">
     <img class="art empty" id="art" alt="">
-    <div class="text">
-      <div class="title" id="title">Connecting…</div>
-      <div class="artist" id="artist"></div>
+    <div class="content">
+      <div class="text">
+        <div class="title" id="title">Connecting…</div>
+        <div class="artist" id="artist"></div>
+      </div>
+      <div class="lyrics empty" id="lyrics"></div>
+      <div class="lyrics-fallback hidden" id="lyricsFallback">no synced lyrics</div>
+      <div class="progress">
+        <div class="track"><div class="fill" id="fill"></div></div>
+        <div class="times"><span id="curTime">0:00</span><span id="totTime">0:00</span></div>
+      </div>
+      <div class="transport">
+        <button class="t-btn" id="prevBtn" type="button" aria-label="Previous track" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 5h2v14H6zM10 12l9-7v14z"/>
+          </svg>
+        </button>
+        <button class="t-btn center" id="toggleBtn" type="button" aria-label="Play" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true" id="toggleIcon">
+            <path d="M7 5l13 7-13 7z"/>
+          </svg>
+        </button>
+        <button class="t-btn" id="nextBtn" type="button" aria-label="Next track" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 5l9 7-9 7zM16 5h2v14h-2z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="phase">
+        <span class="pulse" id="pulse"></span><span id="status">media v2 · phase 7</span><span class="badge" id="spotifyBadge">spotify</span>
+      </div>
     </div>
-    <div class="lyrics empty" id="lyrics"></div>
-    <div class="lyrics-fallback hidden" id="lyricsFallback">no synced lyrics</div>
-    <div class="progress">
-      <div class="track"><div class="fill" id="fill"></div></div>
-      <div class="times"><span id="curTime">0:00</span><span id="totTime">0:00</span></div>
-    </div>
-    <div class="transport">
-      <button class="t-btn" id="prevBtn" type="button" aria-label="Previous track" disabled>
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M6 5h2v14H6zM10 12l9-7v14z"/>
-        </svg>
-      </button>
-      <button class="t-btn center" id="toggleBtn" type="button" aria-label="Play" disabled>
-        <svg viewBox="0 0 24 24" aria-hidden="true" id="toggleIcon">
-          <path d="M7 5l13 7-13 7z"/>
-        </svg>
-      </button>
-      <button class="t-btn" id="nextBtn" type="button" aria-label="Next track" disabled>
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M5 5l9 7-9 7zM16 5h2v14h-2z"/>
-        </svg>
-      </button>
-    </div>
-    <div class="phase">
-      <span class="pulse" id="pulse"></span><span id="status">media v2 · phase 6</span><span class="badge" id="spotifyBadge">spotify</span>
-    </div>
-  </div>
+  </main>
 
   <script type="module">
-    // Phase 6 goal: introduce the heaviest DOM workload — synced lyrics.
-    // We fetch /api/lyrics on track change, parse LRC, insert ♪ markers
-    // in real instrumental gaps, render every line as a <div>, then on
-    // every 200ms tick recompute currentLineIdx and (if changed) swap
-    // the .current class onto the new line + smooth-scroll it to center.
+    // Phase 7 goal: aspect-ratio responsive layout. ResizeObserver toggles
+    // .size-wide vs .size-vertical on the root element. Same DOM, just two
+    // flex orientations. Layout calculation is async and frame-batched, so
+    // the lyrics translateY math (which reads lyricsEl.clientHeight) keeps
+    // working — clientHeight reflects the actual rendered viewport.
 
     const HOST = 'http://127.0.0.1:8976';
     const POLL_MS = 1500;
     const TICK_MS = 200;
-    const QUEUE_MS = 6000;
     const SEEK_THRESHOLD_FORWARD = 2500;
     const SEEK_THRESHOLD_BACKWARD = 2000;
+    // Aspect-ratio threshold separating wide-strip from square/tall.
+    // Edge cell aspect ratios from the kit:
+    //   Small horizontal:  840×344 = 2.44 → wide
+    //   Medium horizontal: 840×696 = 1.21 → vertical
+    //   Large horizontal:  1688×696 = 2.43 → wide
+    //   X-Large horizontal:2536×696 = 3.64 → wide
+    //   Small vertical:    696×416 = 1.67 → vertical
+    //   Medium vertical:   696×840 = 0.83 → vertical
+    //   Large vertical:    696×1688 = 0.41 → vertical
+    //   X-Large vertical:  696×2536 = 0.27 → vertical
+    // 2.0 cleanly separates the four wide cells from the four other ones.
+    const WIDE_ASPECT_THRESHOLD = 2.0;
 
+    const rootEl = document.getElementById('root');
     const artEl = document.getElementById('art');
     const titleEl = document.getElementById('title');
     const artistEl = document.getElementById('artist');
@@ -324,14 +376,47 @@
     let lastTrackKey = '';
     let spotifyAuthed = false;
 
-    // Lyric state
-    let parsedLyrics = [];           // [{ ms, text }, ...]
-    let lyricLineEls = [];           // matching <div> elements
-    let lyricsTrackEl = null;        // the inner translatable container
+    let parsedLyrics = [];
+    let lyricLineEls = [];
+    let lyricsTrackEl = null;
     let currentLineIdx = -1;
-    let lyricsFetchKey = '';         // last (artist|title) we fetched for
+    let lyricsFetchKey = '';
 
     const inFlight = { prev: false, toggle: false, next: false };
+
+    // --- Layout: aspect-ratio observer ----------------------------------
+    let lastIsWide = null;
+    function applyLayout(width, height) {
+      if (width <= 0 || height <= 0) return;
+      const aspect = width / height;
+      const isWide = aspect >= WIDE_ASPECT_THRESHOLD;
+      if (isWide === lastIsWide) return;
+      lastIsWide = isWide;
+      rootEl.classList.toggle('size-wide', isWide);
+      rootEl.classList.toggle('size-vertical', !isWide);
+      // After a layout swap, the lyrics viewport height changes — re-apply
+      // the current line's translateY so it stays centered.
+      if (lyricsTrackEl && currentLineIdx >= 0 && lyricLineEls[currentLineIdx]) {
+        const lineEl = lyricLineEls[currentLineIdx];
+        const containerH = lyricsEl.clientHeight;
+        const lineCenter = lineEl.offsetTop + lineEl.offsetHeight / 2;
+        const offset = containerH / 2 - lineCenter;
+        // Disable transition for the layout-swap snap so it doesn't
+        // animate from the old position.
+        const prevTransition = lyricsTrackEl.style.transition;
+        lyricsTrackEl.style.transition = 'none';
+        lyricsTrackEl.style.transform = 'translateY(' + offset.toFixed(1) + 'px)';
+        requestAnimationFrame(() => {
+          if (lyricsTrackEl) lyricsTrackEl.style.transition = prevTransition;
+        });
+      }
+    }
+    new ResizeObserver(entries => {
+      for (const entry of entries) {
+        applyLayout(entry.contentRect.width, entry.contentRect.height);
+      }
+    }).observe(rootEl);
+    applyLayout(rootEl.clientWidth, rootEl.clientHeight);
 
     function setText(el, value) {
       if (el.textContent !== value) el.textContent = value;
@@ -381,9 +466,8 @@
     async function postAction(path, key) {
       if (inFlight[key]) return;
       inFlight[key] = true;
-      try {
-        await fetch(HOST + path, { method: 'POST' });
-      } catch { /* surfaced by next poll's status */ }
+      try { await fetch(HOST + path, { method: 'POST' }); }
+      catch { /* surfaced by next poll's status */ }
       finally { inFlight[key] = false; }
     }
 
@@ -405,12 +489,11 @@
       return durationMs > 0 ? Math.min(pos, durationMs) : pos;
     }
 
-    // --- Lyric parsing + marker insertion --------------------------------
+    // --- LRC parser + marker insertion (ported from main) ---------------
     function parseLrc(text) {
       const out = [];
-      const lines = text.split('\n');
       const stampRe = /\[(\d+):(\d+)(?:\.(\d+))?\]/g;
-      for (const raw of lines) {
+      for (const raw of text.split('\n')) {
         const stamps = [];
         let lastIdx = 0;
         let m;
@@ -430,7 +513,6 @@
       out.sort((a, b) => a.ms - b.ms);
       return out;
     }
-
     function estimateLineDurationMs(text, gapMs) {
       const chars = text.replace(/\s+/g, ' ').trim().length;
       const naive = Math.max(1500, chars * 280);
@@ -478,7 +560,6 @@
       return out;
     }
 
-    // --- Lyric DOM rendering --------------------------------------------
     function clearLyrics() {
       parsedLyrics = [];
       lyricLineEls = [];
@@ -489,12 +570,8 @@
     }
 
     function renderLyrics(lines) {
-      // Build all lines into a single .track child. The track is what gets
-      // translated; the outer .lyrics is a fixed-position viewport.
       const track = document.createElement('div');
       track.className = 'track';
-      // Disable the transition for the initial render so the brand-new
-      // track snaps to position-0 instead of animating in from elsewhere.
       track.style.transition = 'none';
       lyricLineEls = [];
       for (let i = 0; i < lines.length; i++) {
@@ -507,8 +584,6 @@
       lyricsEl.textContent = '';
       lyricsEl.appendChild(track);
       lyricsTrackEl = track;
-      // Re-enable transition on the next frame so the first real line
-      // change DOES animate.
       requestAnimationFrame(() => {
         if (lyricsTrackEl === track) track.style.transition = '';
       });
@@ -519,8 +594,6 @@
       const key = artist + '|' + title;
       if (key === lyricsFetchKey) return;
       lyricsFetchKey = key;
-      // Optimistically clear while we fetch — avoids stale lyrics
-      // briefly highlighting against the new track's position.
       clearLyrics();
       lyricsFallbackEl.classList.add('hidden');
       try {
@@ -530,7 +603,7 @@
         const res = await fetch(url);
         if (!res.ok) return;
         const data = await res.json();
-        if (key !== lyricsFetchKey) return; // user skipped during fetch
+        if (key !== lyricsFetchKey) return;
         if (data.found && data.syncedLyrics) {
           const raw = parseLrc(data.syncedLyrics);
           parsedLyrics = addInstrumentalMarkers(raw, durationMs);
@@ -546,14 +619,11 @@
 
     function updateCurrentLine(pos) {
       if (parsedLyrics.length === 0 || !lyricsTrackEl) return;
-      // Linear scan from last index — usually the answer is "same" or "next",
-      // so a binary search would be more code without being faster.
       let idx = currentLineIdx;
       while (idx + 1 < parsedLyrics.length && parsedLyrics[idx + 1].ms <= pos) idx++;
       while (idx >= 0 && parsedLyrics[idx].ms > pos) idx--;
       if (idx === currentLineIdx) return;
 
-      // Swap classes on just the two affected lines (no full re-pass).
       if (currentLineIdx >= 0 && lyricLineEls[currentLineIdx]) {
         lyricLineEls[currentLineIdx].classList.remove('current');
         lyricLineEls[currentLineIdx].classList.add('past');
@@ -561,11 +631,6 @@
       if (idx >= 0 && lyricLineEls[idx]) {
         lyricLineEls[idx].classList.remove('past');
         lyricLineEls[idx].classList.add('current');
-        // Translate the inner track so the current line ends up at the
-        // viewport center. Single transform write per line change. The CSS
-        // transition on transform handles the smoothness — and crucially,
-        // if the next line change comes mid-animation, the engine just
-        // redirects toward the new target instead of cancel+restart.
         const lineEl = lyricLineEls[idx];
         const containerH = lyricsEl.clientHeight;
         const lineCenter = lineEl.offsetTop + lineEl.offsetHeight / 2;
@@ -642,8 +707,6 @@
           }
         }
 
-        // Fetch lyrics on track change. We do this AFTER position anchoring
-        // so durationMs is set when addInstrumentalMarkers runs.
         if (trackChanged && np.hasSession && artist && title) {
           fetchLyricsFor(artist, title, np.album || '');
         } else if (!np.hasSession) {
@@ -652,7 +715,7 @@
         }
 
         statusEl.classList.remove('err');
-        statusEl.textContent = 'media v2 · phase 6';
+        statusEl.textContent = 'media v2 · phase 7';
         flashPulse();
       } catch (e) {
         statusEl.classList.add('err');
