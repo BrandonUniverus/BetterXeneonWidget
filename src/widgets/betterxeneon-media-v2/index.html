@@ -218,6 +218,133 @@
       min-width: 0;
     }
 
+    /* Up-next line — shows the head of the Spotify queue when authed.
+       Hidden via display:none when no queue (so it doesn't reserve a
+       blank row in the layout). Sits between source line and lyrics. */
+    .upnext {
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      opacity: 0.55;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 2px;
+    }
+    .upnext.empty { display: none; }
+    .upnext .label {
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: #1db954;
+      margin-right: 6px;
+    }
+
+    /* Library modal — full-cell overlay with a scrollable playlist
+       list. Triggered by the lib button when Spotify is authed. */
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .modal-backdrop.hidden { display: none; }
+    .modal {
+      width: 100%;
+      max-width: 600px;
+      max-height: 100%;
+      background: #15151a;
+      border-radius: 14px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      flex: 0 0 auto;
+    }
+    .modal-title {
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .modal-close {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: manipulation;
+    }
+    .modal-list {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .modal-list::-webkit-scrollbar { width: 6px; }
+    .modal-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+    .modal-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 18px;
+      border: none;
+      background: none;
+      color: #fff;
+      width: 100%;
+      text-align: left;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: background 80ms;
+    }
+    .modal-row:hover, .modal-row:active { background: rgba(255, 255, 255, 0.06); }
+    .modal-row .pl-art {
+      width: 44px;
+      height: 44px;
+      border-radius: 6px;
+      object-fit: cover;
+      background: #2a2a32;
+      flex: 0 0 auto;
+    }
+    .modal-row .pl-meta {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .modal-row .pl-name {
+      font-size: 14px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .modal-row .pl-count {
+      font-size: 11px;
+      opacity: 0.55;
+    }
+    .modal-empty {
+      padding: 30px 18px;
+      text-align: center;
+      font-size: 12px;
+      opacity: 0.5;
+    }
+
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
        avoids the scrollTo preemption flicker.) */
@@ -393,6 +520,7 @@
           <span aria-hidden="true">·</span>
           <span class="album" id="sourceAlbum"></span>
         </div>
+        <div class="upnext empty" id="upnext"><span class="label">Up next</span><span id="upnextText"></span></div>
       </div>
       <div class="lyrics empty" id="lyrics"></div>
       <div class="lyrics-fallback hidden" id="lyricsFallback">no synced lyrics</div>
@@ -428,7 +556,23 @@
         </button>
       </div>
       <div class="phase">
-        <span class="pulse" id="pulse"></span><span id="status">media v2 · phase 7.5</span>
+        <span class="pulse" id="pulse"></span><span id="status">media v2</span>
+      </div>
+    </div>
+
+    <!-- Library modal — full-cell overlay shown when the lib button is
+         tapped while authed. Click on the backdrop OR the close button
+         dismisses it; click on a row plays that playlist via the host
+         and dismisses. Hidden by default. -->
+    <div class="modal-backdrop hidden" id="libModal" role="dialog" aria-modal="true" aria-label="Library">
+      <div class="modal" id="libModalCard">
+        <div class="modal-header">
+          <span class="modal-title">Library</span>
+          <button class="modal-close" id="libModalClose" type="button" aria-label="Close">×</button>
+        </div>
+        <div class="modal-list" id="libModalList">
+          <div class="modal-empty" id="libModalEmpty">No playlists yet — give it a moment.</div>
+        </div>
       </div>
     </div>
   </main>
@@ -509,6 +653,19 @@
     let optAutoExpand = true;
     // eslint-disable-next-line no-unused-vars -- consumed in a future phase
     let optAutoExpandAfterSec = 30;
+
+    // Spotify state — populated by the slow Spotify poll. Up-next is the
+    // head of the queue; library is the user's playlists. Refreshed every
+    // SPOTIFY_SLOW_MS (cheap to ask the host, but every miss past its
+    // 30-min cache hits the actual Spotify API and risks 429, so don't
+    // hammer).
+    const SPOTIFY_QUEUE_MS = 6000;
+    const SPOTIFY_PLAYLISTS_MS = 600000;   // 10 minutes
+    let spotifyQueue = [];
+    let spotifyPlaylists = [];
+    let lastUpnextText = '';
+    let queueTimer = null;
+    let playlistsTimer = null;
     // Aspect-ratio threshold separating wide-strip from square/tall.
     // Edge cell aspect ratios from the kit:
     //   Small horizontal:  840×344 = 2.44 → wide
@@ -525,6 +682,13 @@
     const rootEl = document.getElementById('root');
     const artEl = document.getElementById('art');
     const artBgEl = document.getElementById('artBg');
+    const upnextEl = document.getElementById('upnext');
+    const upnextTextEl = document.getElementById('upnextText');
+    const libModalEl = document.getElementById('libModal');
+    const libModalCardEl = document.getElementById('libModalCard');
+    const libModalCloseEl = document.getElementById('libModalClose');
+    const libModalListEl = document.getElementById('libModalList');
+    const libModalEmptyEl = document.getElementById('libModalEmpty');
     const titleEl = document.getElementById('title');
     const artistEl = document.getElementById('artist');
     const sourceEl = document.getElementById('source');
@@ -731,8 +895,111 @@
         try { await fetch(HOST + '/api/spotify/connect', { method: 'POST' }); }
         catch { /* surfaced by next poll's status */ }
       } else {
-        // Playlists modal — not yet implemented in v2 (planned: phase 8).
+        // Authed: open the Library modal.
+        openLibraryModal();
       }
+    });
+
+    // --- Up-next renderer + Spotify queue/playlists pollers --------------
+    function setUpnext(text) {
+      const v = text || '';
+      if (v === lastUpnextText) return;
+      lastUpnextText = v;
+      if (v) {
+        upnextTextEl.textContent = v;
+        upnextEl.classList.remove('empty');
+      } else {
+        upnextEl.classList.add('empty');
+      }
+    }
+
+    async function pollSpotifyQueue() {
+      if (!spotifyAuthed) { setUpnext(''); return; }
+      try {
+        const r = await fetch(HOST + '/api/spotify/queue');
+        if (!r.ok) return;
+        const data = await r.json();
+        spotifyQueue = Array.isArray(data) ? data : [];
+        if (spotifyQueue.length > 0) {
+          const t = spotifyQueue[0];
+          setUpnext((t.title || '') + (t.artist ? ' — ' + t.artist : ''));
+        } else {
+          setUpnext('');
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    async function pollSpotifyPlaylists() {
+      if (!spotifyAuthed) { spotifyPlaylists = []; renderLibraryList(); return; }
+      try {
+        const r = await fetch(HOST + '/api/spotify/playlists');
+        if (!r.ok) return;
+        const data = await r.json();
+        spotifyPlaylists = Array.isArray(data) ? data : [];
+        // Only re-render the modal list if it's currently open — otherwise
+        // we'll lazy-render on next open.
+        if (!libModalEl.classList.contains('hidden')) renderLibraryList();
+      } catch { /* non-fatal */ }
+    }
+
+    // --- Library modal ---------------------------------------------------
+    async function playPlaylist(id) {
+      try { await fetch(HOST + '/api/spotify/playlists/' + encodeURIComponent(id) + '/play', { method: 'POST' }); }
+      catch { /* surfaced by next poll's status */ }
+    }
+
+    function renderLibraryList() {
+      // Build via DocumentFragment to avoid N appendChild reflows. Each
+      // playlist row is a <button> so it's keyboard-and-touch friendly.
+      const frag = document.createDocumentFragment();
+      for (const pl of spotifyPlaylists) {
+        const row = document.createElement('button');
+        row.className = 'modal-row';
+        row.type = 'button';
+        const img = document.createElement('img');
+        img.className = 'pl-art';
+        img.alt = '';
+        if (pl.albumArtUrl) img.src = pl.albumArtUrl;
+        const meta = document.createElement('div');
+        meta.className = 'pl-meta';
+        const name = document.createElement('div');
+        name.className = 'pl-name';
+        name.textContent = pl.name || 'Untitled';
+        const count = document.createElement('div');
+        count.className = 'pl-count';
+        count.textContent = (pl.trackCount || 0) + ' tracks';
+        meta.appendChild(name);
+        meta.appendChild(count);
+        row.appendChild(img);
+        row.appendChild(meta);
+        row.addEventListener('click', () => {
+          if (pl.id) playPlaylist(pl.id);
+          closeLibraryModal();
+        });
+        frag.appendChild(row);
+      }
+      libModalListEl.textContent = '';
+      if (spotifyPlaylists.length === 0) {
+        libModalListEl.appendChild(libModalEmptyEl);
+      } else {
+        libModalListEl.appendChild(frag);
+      }
+    }
+
+    function openLibraryModal() {
+      libModalEl.classList.remove('hidden');
+      // Refresh whenever opened — Spotify rate-limits hard, so the host
+      // serves cached most of the time anyway.
+      pollSpotifyPlaylists();
+      renderLibraryList();
+    }
+    function closeLibraryModal() {
+      libModalEl.classList.add('hidden');
+    }
+    libModalCloseEl.addEventListener('click', closeLibraryModal);
+    libModalEl.addEventListener('click', e => {
+      // Click on the backdrop (not the card) closes the modal.
+      if (e.target === libModalEl) closeLibraryModal();
     });
 
     function fmtTime(ms) {
@@ -945,6 +1212,7 @@
         const fetchEnd = performance.now();
         const halfRoundTrip = (fetchEnd - fetchStart) / 2;
 
+        const wasAuthed = spotifyAuthed;
         spotifyAuthed = !!ss.connected;
         setLibMode(spotifyAuthed);
 
@@ -953,6 +1221,18 @@
             const pbRes = await fetch(HOST + '/api/spotify/playback');
             if (pbRes.ok) await pbRes.json();
           } catch { /* non-fatal */ }
+        }
+
+        // Auth flipped — kick the slow Spotify pollers (queue + playlists)
+        // immediately on first connect, and stop them on disconnect.
+        if (spotifyAuthed && !wasAuthed) {
+          pollSpotifyQueue();
+          pollSpotifyPlaylists();
+        } else if (!spotifyAuthed && wasAuthed) {
+          spotifyQueue = [];
+          spotifyPlaylists = [];
+          setUpnext('');
+          renderLibraryList();
         }
 
         const title = np.hasSession ? (np.title || 'Unknown title') : 'Nothing playing';
@@ -1074,6 +1354,11 @@
     pollOnce();
     startPollTimer();
     setInterval(tick, TICK_MS);
+    // Slow Spotify pollers — separate cadences from the main 1.5s poll.
+    // Queue refreshes 6s; playlists every 10 min (host caches 30 min,
+    // and Spotify rate-limits /me/playlists hard if hammered).
+    queueTimer = setInterval(pollSpotifyQueue, SPOTIFY_QUEUE_MS);
+    playlistsTimer = setInterval(pollSpotifyPlaylists, SPOTIFY_PLAYLISTS_MS);
   </script>
 </body>
 </html>
