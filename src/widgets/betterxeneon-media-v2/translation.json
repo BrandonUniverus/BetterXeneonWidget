@@ -1,3 +1,9 @@
 {
-  "Better Media v2": "Better Media v2"
+  "Better Media v2": "Better Media v2",
+  "Behavior": "Behavior",
+  "Polling Interval (ms)": "Polling Interval (ms)",
+  "Auto-expand to listening view when idle": "Auto-expand to listening view when idle",
+  "Idle delay before expanding (seconds)": "Idle delay before expanding (seconds)",
+  "Show synced lyrics in listening view": "Show synced lyrics in listening view",
+  "Lyric sync offset (ms)": "Lyric sync offset (ms)"
 }

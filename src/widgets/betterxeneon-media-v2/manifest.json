@@ -2,7 +2,7 @@
   "author": "Brandon Bachmeier",
   "id": "com.betterxeneon.media.v2",
   "name": "Better Media v2",
-  "description": "Phase 7.5 — transport row spans full content width, Playlists/Connect button added in the 4th slot, and a 'Spotify · Album' source line under the artist (replaces the small badge in the phase line).",
+  "description": "Touch-friendly media widget v2. Vanilla JS rebuild from the 7.5 fallback baseline. Adds back the album-art blur background + Behavior settings (Polling Interval, Show synced lyrics, Lyric sync offset, Auto-expand toggle/delay) one bisect step at a time to track down the periodic flicker that plagued the earlier full-feature builds. Aspect-ratio responsive layout, smooth transform-based lyric scroll, full-width transport with Connect/Playlists slot.",
   "version": "0.1.0",
   "preview_icon": "resources/icon.svg",
   "min_framework_version": "1.0.1",

@@ -5,6 +5,54 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>tr('Better Media v2')</title>
   <link rel="icon" type="image/svg+xml" href="resources/icon.svg">
+
+  <!-- Behavior options. Each one becomes a setting in the widget's iCUE
+       panel. The widget reads them via globalThis.<name>. We poll those
+       globals on the same tick as the host fetches and dispatch onChange
+       when a value actually moved. None of these drive paint — they
+       affect logic (polling cadence, lyric visibility, sync offset).
+       Appearance options are deliberately NOT here yet — they're being
+       added back in a later flicker-isolation step. -->
+  <meta name="x-icue-property" content="pollIntervalMs"
+        data-label="tr('Polling Interval (ms)')"
+        data-type="slider"
+        data-default="1500"
+        data-min="500"
+        data-max="5000"
+        data-step="100">
+
+  <meta name="x-icue-property" content="autoExpand"
+        data-label="tr('Auto-expand to listening view when idle')"
+        data-type="switch"
+        data-default="true">
+
+  <meta name="x-icue-property" content="autoExpandAfterSec"
+        data-label="tr('Idle delay before expanding (seconds)')"
+        data-type="slider"
+        data-default="30"
+        data-min="10"
+        data-max="120"
+        data-step="5">
+
+  <meta name="x-icue-property" content="showLyrics"
+        data-label="tr('Show synced lyrics in listening view')"
+        data-type="switch"
+        data-default="true">
+
+  <meta name="x-icue-property" content="lyricSyncOffsetMs"
+        data-label="tr('Lyric sync offset (ms)')"
+        data-type="slider"
+        data-default="0"
+        data-min="-2000"
+        data-max="2000"
+        data-step="50">
+
+  <script id="x-icue-groups" type="application/json">
+    [
+      { "title": "tr('Behavior')", "properties": ["pollIntervalMs", "autoExpand", "autoExpandAfterSec", "showLyrics", "lyricSyncOffsetMs"] }
+    ]
+  </script>
+
   <style>
     html, body {
       margin: 0;
@@ -393,10 +441,74 @@
     // working — clientHeight reflects the actual rendered viewport.
 
     const HOST = 'http://127.0.0.1:8976';
-    const POLL_MS = 1500;
     const TICK_MS = 200;
     const SEEK_THRESHOLD_FORWARD = 2500;
     const SEEK_THRESHOLD_BACKWARD = 2000;
+    // Poll cadence is now an iCUE option (Behavior > Polling Interval).
+    let pollIntervalMs = 1500;
+    let pollTimer = null;
+    function startPollTimer() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(() => { pollOnce(); pollIcueOptions(); }, pollIntervalMs);
+    }
+
+    // ---- iCUE option sync framework -------------------------------------
+    // Two delivery paths from iCUE → us:
+    //   1. icueEvents.onDataUpdated fires on user setting changes (event-
+    //      based path; immediate response).
+    //   2. Polling the globals every poll tick as a fallback for QtWebEngine
+    //      builds that drop the event.
+    // Reading the global also has a quirk: some builds inject the property
+    // as a `var` that globalThis[name] can't see (script-context vs window).
+    // The Function() eval trick resolves the identifier through the scope
+    // chain. Adding a new option = one register call.
+    const icueOptions = [];
+    function readIcueOption(name, defaultValue) {
+      const w = globalThis;
+      if (Object.prototype.hasOwnProperty.call(w, name)) {
+        const v = w[name];
+        if (v !== undefined && v !== null && v !== '') return v;
+      }
+      try {
+        const v = Function('return typeof ' + name + ' !== "undefined" ? ' + name + ' : undefined')();
+        if (v !== undefined && v !== null && v !== '') return v;
+      } catch { /* not defined */ }
+      return defaultValue;
+    }
+    function registerIcueOption(name, defaultValue, onChange) {
+      const initial = readIcueOption(name, defaultValue);
+      icueOptions.push({ name, defaultValue, last: initial, onChange });
+      onChange(initial);
+    }
+    function pollIcueOptions() {
+      for (const entry of icueOptions) {
+        const cur = readIcueOption(entry.name, entry.defaultValue);
+        if (cur !== entry.last) {
+          entry.last = cur;
+          entry.onChange(cur);
+        }
+      }
+    }
+    // Bare assignment to globalThis on purpose — the runtime bridge uses
+    // property descriptors that don't see lexically-scoped declarations,
+    // so the handlers must live directly on the global object.
+    globalThis.icueEvents = {
+      onICUEInitialized: () => pollIcueOptions(),
+      onDataUpdated: () => pollIcueOptions(),
+    };
+    if (globalThis.iCUE_initialized) {
+      pollIcueOptions();
+    }
+
+    // Live snapshots of each Behavior option. The auto-expand pair is
+    // parked here until the listening-mode phase lands — registering them
+    // now keeps the iCUE settings panel in sync with v1's layout.
+    let optShowLyrics = true;
+    let optLyricSyncOffsetMs = 0;
+    // eslint-disable-next-line no-unused-vars -- consumed in a future phase
+    let optAutoExpand = true;
+    // eslint-disable-next-line no-unused-vars -- consumed in a future phase
+    let optAutoExpandAfterSec = 30;
     // Aspect-ratio threshold separating wide-strip from square/tall.
     // Edge cell aspect ratios from the kit:
     //   Small horizontal:  840×344 = 2.44 → wide
@@ -462,6 +574,12 @@
     let lyricsTrackEl = null;
     let currentLineIdx = -1;
     let lyricsFetchKey = '';
+    // Most-recent track metadata. Tracked separately from lyricsFetchKey
+    // so the showLyrics toggle can call fetchLyricsFor on the *current*
+    // track without waiting for the next track-change to trigger it.
+    let currentArtist = '';
+    let currentTitle = '';
+    let currentAlbum = '';
 
     const inFlight = { prev: false, toggle: false, next: false };
 
@@ -738,6 +856,11 @@
       lyricsFetchKey = key;
       clearLyrics();
       lyricsFallbackEl.classList.add('hidden');
+      // Bail early when the user has lyrics off. We still set
+      // lyricsFetchKey above so toggling-on later triggers a fetch via
+      // the showLyrics callback (which clears the key for the same
+      // track and re-calls fetchLyricsFor).
+      if (!optShowLyrics) return;
       try {
         const url = HOST + '/api/lyrics?artist=' + encodeURIComponent(artist) +
           '&title=' + encodeURIComponent(title) +
@@ -761,9 +884,13 @@
 
     function updateCurrentLine(pos) {
       if (parsedLyrics.length === 0 || !lyricsTrackEl) return;
+      // User-tunable offset for residual sync issues — positive value
+      // pushes lyrics earlier (use if highlighter feels behind), negative
+      // pushes them later. Wired to Behavior > Lyric sync offset.
+      const adjustedPos = pos + optLyricSyncOffsetMs;
       let idx = currentLineIdx;
-      while (idx + 1 < parsedLyrics.length && parsedLyrics[idx + 1].ms <= pos) idx++;
-      while (idx >= 0 && parsedLyrics[idx].ms > pos) idx--;
+      while (idx + 1 < parsedLyrics.length && parsedLyrics[idx + 1].ms <= adjustedPos) idx++;
+      while (idx >= 0 && parsedLyrics[idx].ms > adjustedPos) idx--;
       if (idx === currentLineIdx) return;
 
       if (currentLineIdx >= 0 && lyricLineEls[currentLineIdx]) {
@@ -853,15 +980,26 @@
           }
         }
 
+        // Track current metadata for the showLyrics toggle handler — it
+        // needs to fetch lyrics for the *currently-playing* track when
+        // the user flips the option on, without waiting for a track
+        // change.
+        currentArtist = artist;
+        currentTitle = title;
+        currentAlbum = np.album || '';
+
         if (trackChanged && np.hasSession && artist && title) {
           fetchLyricsFor(artist, title, np.album || '');
         } else if (!np.hasSession) {
           clearLyrics();
           lyricsFallbackEl.classList.add('hidden');
+          currentArtist = '';
+          currentTitle = '';
+          currentAlbum = '';
         }
 
         statusEl.classList.remove('err');
-        statusEl.textContent = 'media v2 · phase 7.5';
+        statusEl.textContent = 'media v2';
         flashPulse();
       } catch (e) {
         statusEl.classList.add('err');
@@ -874,8 +1012,49 @@
       lastHasArt = false;
     });
 
+    // Register Behavior options. The handler fires once at registration
+    // with the initial value, then again any time pollIcueOptions
+    // detects a change.
+    registerIcueOption('pollIntervalMs', 1500, value => {
+      const n = Number(value);
+      pollIntervalMs = Number.isFinite(n) ? Math.max(500, Math.min(5000, n)) : 1500;
+      // Restart the interval so the new cadence takes effect immediately
+      // rather than waiting up to the OLD interval first.
+      if (pollTimer) startPollTimer();
+    });
+    registerIcueOption('autoExpand', true, value => {
+      optAutoExpand = value !== false;
+    });
+    registerIcueOption('autoExpandAfterSec', 30, value => {
+      const n = Number(value);
+      optAutoExpandAfterSec = Number.isFinite(n) ? n : 30;
+    });
+    registerIcueOption('showLyrics', true, value => {
+      optShowLyrics = value !== false;
+      if (!optShowLyrics) {
+        // Toggling off: clear the rendered list + the fallback message,
+        // and drop the fetch key so re-enabling later triggers a fresh
+        // fetch on the same track.
+        clearLyrics();
+        lyricsFallbackEl.classList.add('hidden');
+        lyricsFetchKey = '';
+      } else {
+        // Toggling on: drop the fetch key AND fetch directly for the
+        // currently-playing track. Without the direct fetch, we'd wait
+        // for the next track change before lyrics reappeared.
+        lyricsFetchKey = '';
+        if (currentArtist && currentTitle) {
+          fetchLyricsFor(currentArtist, currentTitle, currentAlbum);
+        }
+      }
+    });
+    registerIcueOption('lyricSyncOffsetMs', 0, value => {
+      const n = Number(value);
+      optLyricSyncOffsetMs = Number.isFinite(n) ? n : 0;
+    });
+
     pollOnce();
-    setInterval(pollOnce, POLL_MS);
+    startPollTimer();
     setInterval(tick, TICK_MS);
   </script>
 </body>
