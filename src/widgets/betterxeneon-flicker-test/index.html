@@ -12,53 +12,178 @@
       width: 100%;
       height: 100%;
       background: #0a0a0c;
-      overflow: hidden;
       color: #fff;
+      overflow: hidden;
       font-family: system-ui, -apple-system, sans-serif;
     }
-    .stage {
-      position: absolute;
-      inset: 0;
+    .grid {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      box-sizing: border-box;
+    }
+    .cell {
+      position: relative;
+      border-radius: 12px;
+      background: #15151a;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 8%;
+      overflow: hidden;
+      padding: 16px;
+      box-sizing: border-box;
     }
+    .label {
+      position: absolute;
+      top: 6px;
+      left: 8px;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      opacity: 0.55;
+    }
+
+    /* T1 — pure CSS animation (control). Already proven smooth. */
     .ring {
-      width: min(36vmin, 200px);
-      height: min(36vmin, 200px);
-      border: 6px solid transparent;
+      width: min(28vmin, 120px);
+      height: min(28vmin, 120px);
+      border: 5px solid transparent;
       border-top-color: #1db954;
       border-right-color: #1db954;
       border-radius: 50%;
       animation: spin 1.5s linear infinite;
     }
-    .ring.slow {
-      border-top-color: #4cc9f0;
-      border-right-color: #4cc9f0;
-      animation-duration: 6s;
-    }
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to   { transform: rotate(360deg); }
-    }
-    .label {
+    @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+    /* T2 — KILLER COMBO: background-image URL swapped @ 1.5s on a div
+       with the EXACT production .art-bg filter chain. Production combines
+       these three things (URL swap + heavy filter + transform: scale) on
+       the same element. Each was tested individually and was smooth, but
+       the combination forces a full re-rasterization of the blurred
+       output every URL change. Suspect for the production scanline-band
+       flicker. */
+    .blur-bg-cell { background: #1c1c22; }
+    .blur-bg-cell .blurred {
       position: absolute;
-      bottom: 6%;
-      left: 0;
-      right: 0;
+      inset: 0;
+      background-size: cover;
+      background-position: center;
+      filter: blur(40px) brightness(0.45) saturate(1.1);
+      transform: scale(1.2);
+      pointer-events: none;
+      transition: opacity 300ms ease;
+    }
+    .blur-bg-cell .fg {
+      position: relative;
+      z-index: 1;
+      font-size: 12px;
+      opacity: 0.85;
       text-align: center;
-      font-size: 14px;
-      opacity: 0.55;
-      letter-spacing: 0.05em;
+      padding: 6px 10px;
+      background: rgba(0, 0, 0, 0.45);
+      border-radius: 6px;
+    }
+
+    /* T3 — backdrop-filter on an overlay with content moving underneath */
+    .backdrop-cell { background: #1c1c22; }
+    .backdrop-cell .bg {
+      position: absolute;
+      inset: 0;
+      background:
+        repeating-linear-gradient(45deg, #f72585 0 12px, #4cc9f0 12px 24px);
+      animation: pan 4s linear infinite;
+    }
+    .backdrop-cell .glass {
+      position: relative;
+      z-index: 1;
+      width: 70%;
+      padding: 16px;
+      background: rgba(20, 20, 28, 0.35);
+      backdrop-filter: blur(14px) saturate(1.4);
+      -webkit-backdrop-filter: blur(14px) saturate(1.4);
+      border-radius: 12px;
+      text-align: center;
+      font-size: 13px;
+    }
+    @keyframes pan {
+      from { transform: translateX(0); }
+      to   { transform: translateX(-48px); }
+    }
+
+    /* T4 — image element swapped via URL every 1.5s (mimics album-art change) */
+    .img-swap-cell { background: #1c1c22; }
+    .img-swap-cell .swap-img {
+      width: 70%;
+      height: 70%;
+      object-fit: cover;
+      border-radius: 8px;
+      transition: opacity 200ms;
     }
   </style>
 </head>
 <body>
-  <div class="stage">
-    <div class="ring"></div>
-    <div class="ring slow"></div>
+  <div class="grid">
+    <div class="cell">
+      <span class="label">T1 · pure CSS spin (control)</span>
+      <div class="ring"></div>
+    </div>
+
+    <div class="cell blur-bg-cell">
+      <span class="label">T2 · bg-image URL swap + blur(40px) + scale @ 1.5s</span>
+      <div class="blurred" id="blurredBg"></div>
+      <div class="fg">production<br>.art-bg combo</div>
+    </div>
+
+    <div class="cell backdrop-cell">
+      <span class="label">T3 · backdrop-filter over moving stripes</span>
+      <div class="bg"></div>
+      <div class="glass">backdrop blur</div>
+    </div>
+
+    <div class="cell img-swap-cell">
+      <span class="label">T4 · &lt;img&gt; URL swap @ 1.5s (album-art change)</span>
+      <img class="swap-img" id="swapImg" alt="">
+    </div>
   </div>
-  <div class="label">flicker test &middot; pure CSS &middot; no JS</div>
+
+  <script type="module">
+    // T2 + T4 both swap art every 1.5s, but on different element types:
+    //   T2: a <div> with background-image: url(...) AND filter: blur(40px)
+    //       brightness saturate AND transform: scale(1.2). This is the
+    //       EXACT production .art-bg setup. Suspect for the scanline-band
+    //       flicker the user reported.
+    //   T4: a plain <img> with no filter. Already proven smooth in earlier
+    //       phase as a control.
+    // T3 is pure CSS (no JS). All three URL paths use data: SVGs so we
+    // have zero network dependency.
+
+    function makeArt(hue) {
+      var svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">' +
+        '<defs><radialGradient id="g" cx="50%" cy="40%" r="70%">' +
+        '<stop offset="0" stop-color="hsl(' + hue + ',80%,55%)"/>' +
+        '<stop offset="1" stop-color="hsl(' + ((hue + 60) % 360) + ',60%,15%)"/>' +
+        '</radialGradient></defs>' +
+        '<rect width="200" height="200" fill="url(#g)"/>' +
+        '<circle cx="100" cy="100" r="60" fill="hsl(' + ((hue + 180) % 360) + ',70%,55%)" opacity="0.6"/>' +
+        '</svg>';
+      return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+    }
+
+    var arts = [makeArt(140), makeArt(260), makeArt(20)];
+    var img = document.getElementById('swapImg');
+    var blurredBg = document.getElementById('blurredBg');
+    var i = 0;
+    img.src = arts[0];
+    blurredBg.style.backgroundImage = 'url("' + arts[0] + '")';
+    setInterval(function () {
+      i = (i + 1) % arts.length;
+      img.src = arts[i];
+      blurredBg.style.backgroundImage = 'url("' + arts[i] + '")';
+    }, 1500);
+  </script>
 </body>
 </html>
