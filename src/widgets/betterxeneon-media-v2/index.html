@@ -24,13 +24,33 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 6px;
+      gap: 12px;
       padding: 16px;
       box-sizing: border-box;
       text-align: center;
     }
+    /* Square art, capped so it leaves room for title/artist text on small
+       cells. min-height 0 lets flex shrink it on portrait/short cells. */
+    .art {
+      width: min(40vmin, 200px);
+      aspect-ratio: 1 / 1;
+      flex: 0 1 auto;
+      min-height: 0;
+      border-radius: 10px;
+      object-fit: cover;
+      background: #1c1c22;   /* placeholder while no art */
+      display: block;
+    }
+    .art.empty { visibility: hidden; }
+    .text {
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
     .title {
-      font-size: clamp(20px, 5vmin, 36px);
+      font-size: clamp(18px, 4vmin, 30px);
       font-weight: 700;
       letter-spacing: 0.01em;
       max-width: 100%;
@@ -39,7 +59,7 @@
       white-space: nowrap;
     }
     .artist {
-      font-size: clamp(14px, 3vmin, 22px);
+      font-size: clamp(13px, 2.6vmin, 20px);
       font-weight: 500;
       opacity: 0.75;
       max-width: 100%;
@@ -48,14 +68,12 @@
       white-space: nowrap;
     }
     .phase {
-      margin-top: 12px;
+      margin-top: 8px;
       font-size: 11px;
       letter-spacing: 0.08em;
       opacity: 0.45;
       text-transform: uppercase;
     }
-    /* Tiny "live" indicator that pulses on each successful poll. If polling
-       is wedged or erroring, this stops pulsing and you can see why. */
     .pulse {
       display: inline-block;
       width: 6px;
@@ -68,42 +86,57 @@
       opacity: 0.25;
     }
     .pulse.live { opacity: 1; }
-    .err {
-      color: #ff6b6b;
-    }
+    .err { color: #ff6b6b; }
   </style>
 </head>
 <body>
   <div class="root">
-    <div class="title" id="title">Connecting…</div>
-    <div class="artist" id="artist"></div>
-    <div class="phase"><span class="pulse" id="pulse"></span><span id="status">media v2 · phase 1</span></div>
+    <img class="art empty" id="art" alt="">
+    <div class="text">
+      <div class="title" id="title">Connecting…</div>
+      <div class="artist" id="artist"></div>
+    </div>
+    <div class="phase"><span class="pulse" id="pulse"></span><span id="status">media v2 · phase 2</span></div>
   </div>
 
   <script type="module">
-    // Phase 1 goal: prove that polling + textContent updates do NOT flicker.
-    // We already verified in the bisect grid that 200ms text updates are
-    // smooth — this just adds a real fetch every 1.5s. If THIS phase
-    // flickers, the culprit is fetch-driven layout thrash, otherwise we
-    // move on to Phase 2 (album art).
+    // Phase 2 goal: introduce the <img> element + album-art swap on track
+    // change. We only update the src when the host's artVersion changes,
+    // not on every poll — otherwise the browser would re-decode the same
+    // bytes 40 times a minute. The version number doubles as the cache
+    // buster so the host can serve a new image under the same URL path.
 
     const HOST = 'http://127.0.0.1:8976';
     const POLL_MS = 1500;
 
+    const artEl = document.getElementById('art');
     const titleEl = document.getElementById('title');
     const artistEl = document.getElementById('artist');
     const pulseEl = document.getElementById('pulse');
     const statusEl = document.getElementById('status');
 
-    // Track last-rendered values so we only touch the DOM when something
-    // actually changed. textContent assignment to the same string is cheap
-    // but still triggers a style recalc — skipping it altogether is cheaper.
     let lastTitle = null;
     let lastArtist = null;
+    let lastArtVersion = -1;
+    let lastHasArt = null;
     let pulseTimeout = null;
 
     function setText(el, value) {
       if (el.textContent !== value) el.textContent = value;
+    }
+
+    function setArt(hasArt, version) {
+      // Only touch the <img> when something *meaningful* changed. Re-setting
+      // the same .src forces a re-decode in some browsers; flipping the same
+      // class is wasted style work.
+      if (hasArt && version !== lastArtVersion) {
+        artEl.src = HOST + '/api/media/album-art?v=' + version;
+        lastArtVersion = version;
+      }
+      if (hasArt !== lastHasArt) {
+        artEl.classList.toggle('empty', !hasArt);
+        lastHasArt = hasArt;
+      }
     }
 
     function flashPulse() {
@@ -121,14 +154,22 @@
         const artist = np.hasSession ? (np.artist || '') : '';
         if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
         if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
+        setArt(!!np.hasArt && !!np.hasSession, np.artVersion ?? 0);
         statusEl.classList.remove('err');
-        statusEl.textContent = 'media v2 · phase 1';
+        statusEl.textContent = 'media v2 · phase 2';
         flashPulse();
       } catch (e) {
         statusEl.classList.add('err');
         statusEl.textContent = 'host offline · ' + (e.message || 'unknown error');
       }
     }
+
+    // Hide the <img> if the URL it eventually loads turns out to be a 404
+    // or unreachable. Without this you'd see a broken-image icon flash.
+    artEl.addEventListener('error', () => {
+      artEl.classList.add('empty');
+      lastHasArt = false;
+    });
 
     pollOnce();
     setInterval(pollOnce, POLL_MS);

@@ -2,7 +2,7 @@
   "author": "Brandon Bachmeier",
   "id": "com.betterxeneon.media.v2",
   "name": "Better Media v2",
-  "description": "Phase 1 — title + artist fed from the host. Polls /api/media/now-playing on the 127.0.0.1:8976 host service every 1.5s. No images, no buttons, no Spotify, no lyrics. Pure DOM updates via textContent. Installs alongside the original Better Media so you can A/B-test flicker.",
+  "description": "Phase 2 — adds album art. Polls /api/media/now-playing every 1.5s and renders an <img> from /api/media/album-art when artVersion bumps. Still no buttons, Spotify, or lyrics. Installs alongside the original so you can A/B-test flicker.",
   "version": "0.1.0",
   "preview_icon": "resources/icon.svg",
   "min_framework_version": "1.0.1",
