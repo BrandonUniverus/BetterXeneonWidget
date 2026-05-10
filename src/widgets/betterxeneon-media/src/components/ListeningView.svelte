@@ -181,30 +181,57 @@
   }
 
   /**
-   * Synthesize ♪ markers in long instrumental gaps. LRClib usually omits
-   * fillers, so a 20-second guitar solo is just dead space in the lyrics
-   * view — no visual feedback that anything is happening. We insert ♪
-   * placeholders spaced through any gap longer than GAP_THRESHOLD_MS, so
-   * the highlighter advances through the instrumental.
+   * Synthesize ♪ markers in long instrumental gaps. LRClib only stamps line
+   * START times — never durations — so a 6-second "gap" between two lines
+   * is often just the singer holding the last word, not silence. A naive
+   * gap threshold pops ♪ over normal singing.
    *
-   * Skipped if LRClib already provided markers in the gap (a few tracks do).
+   * The actual signal we want is "true silence after singing should
+   * plausibly have ended." We estimate per-line sung duration from
+   * character count (sung pop lyrics ~3-4 chars/sec, ≈280ms/char), pin it
+   * to a sensible floor + ceiling, then only insert markers in what's left
+   * AFTER that estimated singing finishes.
+   *
+   * Skipped if LRClib already provided a marker line in the gap.
    */
-  const NOTE = '♪'; // ♪
-  function isExistingMarker(text: string): boolean {
-    // Strip whitespace + common note glyphs, see if anything remains.
-    return /^[\s♪-♯()*\-—.,:;'"]*$/.test(text)
-      || /^\(?\s*(instrumental|interlude|music|outro|intro)\s*\)?$/i.test(text);
+  const NOTE = '♪';
+
+  // Sung-line duration estimate. Floor = 1500ms (so a one-syllable held
+  // note still gets some duration). Ceiling = 90% of the visible gap (so
+  // we never claim singing fills the entire gap and skip a real
+  // instrumental). 280ms/char tracks pop-vocal pacing reasonably across
+  // tempos — slow ballads end up underestimated, but a too-short estimate
+  // just means we MIGHT add a marker; a too-long one means we MISS one.
+  function estimateLineDurationMs(text: string, gapMs: number): number {
+    const chars = text.replace(/\s+/g, ' ').trim().length;
+    const naive = Math.max(1500, chars * 280);
+    return Math.min(naive, Math.max(1500, gapMs * 0.9));
   }
+
+  function isExistingMarker(text: string): boolean {
+    // Just whitespace + musical-note glyphs (♪♫♬♭♮♯) — punctuation alone
+    // isn't enough to count as a marker (don't want to misclassify e.g.
+    // "(repeat)" as instrumental).
+    if (/^[\s♪-♯]+$/.test(text)) return true;
+    return /^\(?\s*(instrumental|interlude|music|guitar solo|outro|intro)\s*\)?$/i.test(text);
+  }
+
   function addInstrumentalMarkers(lines: LyricLine[], songDurationMs: number): LyricLine[] {
     if (lines.length === 0) return lines;
-    const GAP_THRESHOLD_MS = 5_000;
-    const SPACING_MS = 6_000;
-    const LEAD_MS = 600;       // wait this long after a lyric ends before showing ♪
-    const TAIL_MS = 1_500;     // and stop this long before the next lyric starts
+    // True-silence threshold AFTER singing is estimated to end. 8s is well
+    // past any sustained note but short enough to catch most transitions
+    // and bridges. (Was 5s gap-from-line-start, which fired on normal
+    // sustained singing.)
+    const SILENCE_THRESHOLD_MS = 8_000;
+    const SPACING_MS = 8_000;
+    const LEAD_MS = 1_000;
+    const TAIL_MS = 1_500;
     const out: LyricLine[] = [];
 
+    // Insert markers between [start, end) where `start` is when singing
+    // ENDED (not when the previous line began).
     const insertGap = (start: number, end: number) => {
-      if (end - start < GAP_THRESHOLD_MS) return;
+      if (end - start < SILENCE_THRESHOLD_MS) return;
       let t = start + LEAD_MS;
       while (t + 250 < end - TAIL_MS) {
         out.push({ ms: t, text: NOTE });
@@ -212,7 +239,7 @@
       }
     };
 
-    // Lead-in before the first lyric.
+    // Lead-in before the first lyric (no previous line, so no estimate).
     insertGap(0, lines[0]?.ms ?? 0);
 
     for (let i = 0; i < lines.length; i++) {
@@ -220,14 +247,19 @@
       out.push(line);
       const next = lines[i + 1];
       if (!next) {
-        // Trailing gap to song end — only if we know the song length.
-        if (songDurationMs > 0) insertGap(line.ms, songDurationMs);
+        // Trailing gap to song end. Estimate the final line's sung
+        // duration so we don't drop a ♪ over a held outro note.
+        if (songDurationMs > 0) {
+          const trailingGap = songDurationMs - line.ms;
+          const sungEnds = line.ms + estimateLineDurationMs(line.text, trailingGap);
+          insertGap(sungEnds, songDurationMs);
+        }
         break;
       }
-      // Skip our heuristic if this line OR the next already looks like a
-      // marker (don't double up on what LRClib provided).
       if (isExistingMarker(line.text) || isExistingMarker(next.text)) continue;
-      insertGap(line.ms, next.ms);
+      const gap = next.ms - line.ms;
+      const sungEnds = line.ms + estimateLineDurationMs(line.text, gap);
+      insertGap(sungEnds, next.ms);
     }
 
     out.sort((a, b) => a.ms - b.ms);
@@ -321,6 +353,12 @@
     if (delta > 2500 || delta < -2000) {
       anchorPosMs = serverPos;
       anchorAt = serverAt;
+      // Reset the monotonic floor too. Without this, a seek-back (or a
+      // song looping back to 0:00 with the same title) leaves the
+      // highlighter stuck at the previous high-water mark — the clamp
+      // wins forever and the user sees ♪ markers from the outro while
+      // the song is actually back in the verse.
+      lastDisplayedMs = serverPos;
     }
   });
 
@@ -462,23 +500,7 @@
     </div>
 
     <div class="content">
-      {#if needsConnect}
-        <!-- Not authed: prominent CTA card in the content area. Without
-             Spotify Web API there's no queue to show and no lyrics to fetch
-             for arbitrary tracks, so this slot is the right place for the
-             call-to-action. -->
-        <button class="connect-cta" type="button" onclick={onConnect} disabled={connecting}>
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>
-          </svg>
-          <div class="connect-text">
-            <span class="connect-headline">{connecting ? 'Opening browser…' : 'Connect Spotify'}</span>
-            <span class="connect-sub">{connecting ? 'Sign in, then return here' : 'For queue, lyrics, and your playlists'}</span>
-          </div>
-          <span class="connect-pill">{connecting ? 'Working…' : 'Sign in'}</span>
-        </button>
-      {:else if hasSyncedLyrics && isMedium && mediumLines}
+      {#if hasSyncedLyrics && isMedium && mediumLines}
         <!-- Compact 3-line view for medium mode. Previous line gets a
              text-shadow stroke so it's legible against bright/light album
              art that bleeds through. -->
@@ -488,7 +510,9 @@
           <div class="lyric-line next">{mediumLines?.next ?? ''}</div>
         </div>
       {:else if hasSyncedLyrics}
-        <!-- Large mode: scrollable full lyrics with auto-center on current. -->
+        <!-- Large mode: scrollable full lyrics with auto-center on current.
+             Renders even when not Spotify-authed since LRClib is independent
+             of Spotify auth and SMTC gives us title+artist for the lookup. -->
         <div class="lyrics" bind:this={lyricsEl}>
           {#each parsedLyrics as line, i (i)}
             <div class="lyric-line"
@@ -548,6 +572,15 @@
               <line x1="3" y1="6" x2="3.01" y2="6"/>
               <line x1="3" y1="12" x2="3.01" y2="12"/>
               <line x1="3" y1="18" x2="3.01" y2="18"/>
+            </svg>
+          </button>
+        {:else}
+          <!-- Not authed: same slot as Playlists, but a Spotify Connect
+               action. Same icon as the old big CTA card so it's recognizable. -->
+          <button class="t-btn connect" type="button" onclick={onConnect} disabled={connecting} aria-label={connecting ? 'Opening browser to connect Spotify' : 'Connect Spotify'} title={connecting ? 'Opening browser…' : 'Connect Spotify'}>
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>
             </svg>
           </button>
         {/if}
@@ -733,71 +766,6 @@
     flex-direction: column;
   }
 
-  /* Connect CTA — used when not authed. Card-style, fills the content area
-     so it's the obvious primary action when Spotify integration isn't on yet. */
-  .connect-cta {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
-    gap: var(--gap);
-    width: 100%;
-    height: 100%;
-    padding: 0 calc(var(--layout-unit) * 2);
-    background: var(--surface);
-    color: var(--text-color);
-    border: 1px solid color-mix(in srgb, var(--spotify-green) 35%, var(--border));
-    border-radius: var(--radius);
-    text-align: left;
-    touch-action: manipulation;
-    transition: background 100ms, border-color 100ms;
-  }
-  .connect-cta:hover { background: var(--surface-strong); }
-  .connect-cta:active { background: var(--surface-strong); }
-  .connect-cta:disabled { opacity: 0.7; }
-  .connect-cta > * { pointer-events: none; }
-
-  .connect-cta svg {
-    width: clamp(28px, calc(var(--layout-unit) * 6), 80px);
-    height: clamp(28px, calc(var(--layout-unit) * 6), 80px);
-    color: var(--spotify-green);
-    flex-shrink: 0;
-  }
-
-  .connect-text {
-    display: flex;
-    flex-direction: column;
-    gap: calc(var(--layout-unit) * 0.2);
-    min-width: 0;
-  }
-  .connect-headline {
-    font-size: var(--font-body);
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .connect-sub {
-    font-size: var(--font-label);
-    opacity: 0.65;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .connect-pill {
-    padding: calc(var(--layout-unit) * 1) calc(var(--layout-unit) * 2.4);
-    background: var(--spotify-green);
-    color: #08130c;
-    border-radius: 999px;
-    font-size: var(--font-label);
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    flex-shrink: 0;
-  }
-  .connect-cta:disabled .connect-pill {
-    background: color-mix(in srgb, var(--spotify-green) 60%, var(--surface));
-    color: var(--text-color);
-  }
-
   /* ---- Large-mode lyrics: scrolling list with mask + auto-scroll ----- */
   .lyrics {
     flex: 1 1 auto;
@@ -971,6 +939,13 @@
     color: var(--spotify-green);
   }
   .t-btn.playlists svg { width: 50%; height: 50%; }
+
+  /* Spotify Connect button — same shape as a transport button, but the
+     full-color Spotify wordmark icon so it reads as the action it is. */
+  .t-btn.connect {
+    color: var(--spotify-green);
+  }
+  .t-btn.connect svg { width: 56%; height: 56%; }
 
   .listening.idle .title {
     opacity: 0.55;

@@ -14,6 +14,7 @@
 node_modules/
 **/dist/
 **/.svelte-kit/
+**/.vite/
 *.tsbuildinfo
 .npmrc
 
