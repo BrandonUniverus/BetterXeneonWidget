@@ -64,26 +64,54 @@
       white-space: nowrap;
     }
 
-    /* Lyrics — scrollable list, takes flex space. The current line is
-       centered via JS auto-scroll. Each line gets opacity transitions so
-       past/future lines fade. */
+    /* Lyrics — fixed-position viewport, inner track translates via transform.
+       Browser scrollTo({behavior:'smooth'}) was being preempted on every
+       tick (since we re-call it before the previous animation finishes),
+       which made the engine cancel + restart and produced visible flicker.
+       transform on a child is composite-only AND CSS transitions can be
+       redirected mid-animation without a restart. Mask-image was also
+       removed — masks force re-rasterization on the masked area each
+       repaint, which compounds the problem. The fade is now a static
+       overlay (.lyrics::before/::after) instead. */
     .lyrics {
+      position: relative;
       flex: 1 1 auto;
       width: 90%;
       min-height: 0;
-      overflow-y: hidden;
-      mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 82%, transparent 100%);
-      -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 82%, transparent 100%);
+      overflow: hidden;
       font-size: clamp(13px, 2.4vmin, 18px);
       line-height: 1.5;
-      padding: 32% 0;
+    }
+    .lyrics::before, .lyrics::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 18%;
+      pointer-events: none;
+      z-index: 2;
+    }
+    .lyrics::before {
+      top: 0;
+      background: linear-gradient(to bottom, #0a0a0c 0, transparent 100%);
+    }
+    .lyrics::after {
+      bottom: 0;
+      background: linear-gradient(to top, #0a0a0c 0, transparent 100%);
+    }
+    .lyrics .track {
+      /* Translated each line change. Transition on transform = GPU-only. */
+      transform: translateY(0);
+      transition: transform 350ms cubic-bezier(0.22, 0.61, 0.36, 1);
+      will-change: transform;
+      padding: 50% 0;
       box-sizing: border-box;
     }
     .lyrics .line {
       padding: 4px 8px;
       opacity: 0.35;
       color: #fff;
-      transition: opacity 200ms, color 200ms;
+      transition: opacity 250ms, color 250ms;
     }
     .lyrics .line.past { opacity: 0.4; }
     .lyrics .line.current {
@@ -299,6 +327,7 @@
     // Lyric state
     let parsedLyrics = [];           // [{ ms, text }, ...]
     let lyricLineEls = [];           // matching <div> elements
+    let lyricsTrackEl = null;        // the inner translatable container
     let currentLineIdx = -1;
     let lyricsFetchKey = '';         // last (artist|title) we fetched for
 
@@ -453,25 +482,36 @@
     function clearLyrics() {
       parsedLyrics = [];
       lyricLineEls = [];
+      lyricsTrackEl = null;
       currentLineIdx = -1;
       lyricsEl.textContent = '';
       lyricsEl.classList.add('empty');
     }
 
     function renderLyrics(lines) {
-      // Build all lines in a DocumentFragment, swap in once. Avoids 40
-      // separate appendChild hits and the layout work each would trigger.
-      const frag = document.createDocumentFragment();
+      // Build all lines into a single .track child. The track is what gets
+      // translated; the outer .lyrics is a fixed-position viewport.
+      const track = document.createElement('div');
+      track.className = 'track';
+      // Disable the transition for the initial render so the brand-new
+      // track snaps to position-0 instead of animating in from elsewhere.
+      track.style.transition = 'none';
       lyricLineEls = [];
       for (let i = 0; i < lines.length; i++) {
         const div = document.createElement('div');
         div.className = 'line';
         div.textContent = lines[i].text;
-        frag.appendChild(div);
+        track.appendChild(div);
         lyricLineEls.push(div);
       }
       lyricsEl.textContent = '';
-      lyricsEl.appendChild(frag);
+      lyricsEl.appendChild(track);
+      lyricsTrackEl = track;
+      // Re-enable transition on the next frame so the first real line
+      // change DOES animate.
+      requestAnimationFrame(() => {
+        if (lyricsTrackEl === track) track.style.transition = '';
+      });
       lyricsEl.classList.remove('empty');
     }
 
@@ -505,13 +545,11 @@
     }
 
     function updateCurrentLine(pos) {
-      if (parsedLyrics.length === 0) return;
+      if (parsedLyrics.length === 0 || !lyricsTrackEl) return;
       // Linear scan from last index — usually the answer is "same" or "next",
       // so a binary search would be more code without being faster.
       let idx = currentLineIdx;
-      // Forward
       while (idx + 1 < parsedLyrics.length && parsedLyrics[idx + 1].ms <= pos) idx++;
-      // Backward (seek-back case)
       while (idx >= 0 && parsedLyrics[idx].ms > pos) idx--;
       if (idx === currentLineIdx) return;
 
@@ -523,10 +561,16 @@
       if (idx >= 0 && lyricLineEls[idx]) {
         lyricLineEls[idx].classList.remove('past');
         lyricLineEls[idx].classList.add('current');
-        // Smooth-scroll the current line to the center of the lyrics box.
+        // Translate the inner track so the current line ends up at the
+        // viewport center. Single transform write per line change. The CSS
+        // transition on transform handles the smoothness — and crucially,
+        // if the next line change comes mid-animation, the engine just
+        // redirects toward the new target instead of cancel+restart.
+        const lineEl = lyricLineEls[idx];
         const containerH = lyricsEl.clientHeight;
-        const lineCenter = lyricLineEls[idx].offsetTop + lyricLineEls[idx].offsetHeight / 2;
-        lyricsEl.scrollTo({ top: lineCenter - containerH / 2, behavior: 'smooth' });
+        const lineCenter = lineEl.offsetTop + lineEl.offsetHeight / 2;
+        const offset = containerH / 2 - lineCenter;
+        lyricsTrackEl.style.transform = 'translateY(' + offset.toFixed(1) + 'px)';
       }
       currentLineIdx = idx;
     }
