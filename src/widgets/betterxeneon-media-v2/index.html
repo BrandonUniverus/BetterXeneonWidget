@@ -24,13 +24,13 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 12px;
+      gap: 10px;
       padding: 16px;
       box-sizing: border-box;
       text-align: center;
     }
     .art {
-      width: min(36vmin, 180px);
+      width: min(34vmin, 170px);
       aspect-ratio: 1 / 1;
       flex: 0 1 auto;
       min-height: 0;
@@ -45,12 +45,11 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 4px;
+      gap: 2px;
     }
     .title {
       font-size: clamp(18px, 4vmin, 30px);
       font-weight: 700;
-      letter-spacing: 0.01em;
       max-width: 100%;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -64,6 +63,41 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    /* Progress bar — track is fixed, fill scales horizontally via transform.
+       Using scaleX (not width) so the update is composite-only: no layout,
+       no paint of the track, just GPU re-rasterization of the fill layer. */
+    .progress {
+      width: min(60vmin, 320px);
+      max-width: 90%;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 4px;
+    }
+    .progress .track {
+      height: 4px;
+      background: #2a2a32;
+      border-radius: 2px;
+      overflow: hidden;
+      position: relative;
+    }
+    .progress .fill {
+      position: absolute;
+      inset: 0;
+      background: #1db954;
+      transform-origin: left center;
+      transform: scaleX(0);
+      will-change: transform;
+    }
+    .progress .times {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      opacity: 0.6;
+      letter-spacing: 0.02em;
     }
 
     /* Transport row */
@@ -94,7 +128,7 @@
     .t-btn svg {
       width: 42%;
       height: 42%;
-      pointer-events: none; /* SVG children would otherwise eat clicks */
+      pointer-events: none;
       fill: currentColor;
     }
     .t-btn.center {
@@ -132,6 +166,10 @@
       <div class="title" id="title">Connecting…</div>
       <div class="artist" id="artist"></div>
     </div>
+    <div class="progress">
+      <div class="track"><div class="fill" id="fill"></div></div>
+      <div class="times"><span id="curTime">0:00</span><span id="totTime">0:00</span></div>
+    </div>
     <div class="transport">
       <button class="t-btn" id="prevBtn" type="button" aria-label="Previous track" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -149,18 +187,25 @@
         </svg>
       </button>
     </div>
-    <div class="phase"><span class="pulse" id="pulse"></span><span id="status">media v2 · phase 3</span></div>
+    <div class="phase"><span class="pulse" id="pulse"></span><span id="status">media v2 · phase 4</span></div>
   </div>
 
   <script type="module">
-    // Phase 3 goal: add transport interactivity. Three buttons that POST
-    // to the host. State (icon + disabled) reflects what SMTC says is
-    // available. In-flight guards prevent rapid tap-spam from queueing
-    // multiple POSTs (a real concern on touchscreens — iCUE's QtWebEngine
-    // sometimes delivers a slightly-held tap as several click events).
+    // Phase 4 goal: introduce the 200ms tick cadence that drives a smooth
+    // progress bar. Server polls (1.5s) anchor the playback position;
+    // local 200ms ticks extrapolate forward. The bar update path is
+    // deliberately compositor-only (transform: scaleX) so even at 5 Hz
+    // it shouldn't cost layout work. Time labels update via textContent
+    // every tick, but only when the displayed minute:second value changed.
 
     const HOST = 'http://127.0.0.1:8976';
     const POLL_MS = 1500;
+    const TICK_MS = 200;
+    // If the server estimate diverges from local extrapolation by more
+    // than this, treat it as a seek and hard re-anchor. Otherwise we
+    // ignore minor drift to keep the bar moving smoothly.
+    const SEEK_THRESHOLD_FORWARD = 2500;
+    const SEEK_THRESHOLD_BACKWARD = 2000;
 
     const artEl = document.getElementById('art');
     const titleEl = document.getElementById('title');
@@ -169,12 +214,12 @@
     const toggleBtn = document.getElementById('toggleBtn');
     const nextBtn = document.getElementById('nextBtn');
     const toggleIcon = document.getElementById('toggleIcon');
+    const fillEl = document.getElementById('fill');
+    const curTimeEl = document.getElementById('curTime');
+    const totTimeEl = document.getElementById('totTime');
     const pulseEl = document.getElementById('pulse');
     const statusEl = document.getElementById('status');
 
-    // SVG path data for the play vs pause states. Swapped via setAttribute
-    // on the existing <path> child rather than replacing the whole <svg>,
-    // since path-d swaps don't trigger a layer rebuild on most engines.
     const PLAY_PATH = 'M7 5l13 7-13 7z';
     const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
 
@@ -186,9 +231,19 @@
     let lastCanPrev = null;
     let lastCanNext = null;
     let lastCanToggle = null;
+    let lastCurTime = null;
+    let lastTotTime = null;
+    let lastFillRatio = -1;
     let pulseTimeout = null;
 
-    // In-flight guards (one per button so a slow Next doesn't block Play).
+    // Position state. anchorPosMs/anchorAt re-set on each poll (or on
+    // detected seek). Track key changes also re-anchor.
+    let anchorPosMs = 0;
+    let anchorAt = 0;
+    let durationMs = 0;
+    let isPlaying = false;
+    let lastTrackKey = '';
+
     const inFlight = { prev: false, toggle: false, next: false };
 
     function setText(el, value) {
@@ -206,11 +261,11 @@
       }
     }
 
-    function setToggleState(isPlaying, canToggle) {
-      if (isPlaying !== lastIsPlaying) {
-        toggleIcon.firstElementChild.setAttribute('d', isPlaying ? PAUSE_PATH : PLAY_PATH);
-        toggleBtn.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
-        lastIsPlaying = isPlaying;
+    function setToggleState(playing, canToggle) {
+      if (playing !== lastIsPlaying) {
+        toggleIcon.firstElementChild.setAttribute('d', playing ? PAUSE_PATH : PLAY_PATH);
+        toggleBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+        lastIsPlaying = playing;
       }
       if (canToggle !== lastCanToggle) {
         toggleBtn.disabled = !canToggle;
@@ -219,8 +274,6 @@
     }
 
     function setBtnEnabled(btn, enabled, lastVar) {
-      // Returns the new "last" value so the caller can store it. Avoids
-      // touching .disabled when the value didn't change.
       if (enabled !== lastVar) btn.disabled = !enabled;
       return enabled;
     }
@@ -244,25 +297,81 @@
     toggleBtn.addEventListener('click', () => postAction('/api/media/toggle', 'toggle'));
     nextBtn.addEventListener('click', () => postAction('/api/media/next', 'next'));
 
+    function fmtTime(ms) {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      const m = Math.floor(s / 60);
+      const r = s - m * 60;
+      return m + ':' + (r < 10 ? '0' : '') + r;
+    }
+
+    function currentPosition() {
+      // Local extrapolation from anchor. Pause = freeze at anchor value.
+      if (anchorAt === 0) return 0;
+      const elapsed = isPlaying ? Math.max(0, performance.now() - anchorAt) : 0;
+      const pos = anchorPosMs + elapsed;
+      return durationMs > 0 ? Math.min(pos, durationMs) : pos;
+    }
+
+    function tick() {
+      const pos = currentPosition();
+      // Bar fill — only update if the visible ratio changed by more than
+      // 1/1000 (i.e. ~1 device pixel on a 1000px-wide bar). Avoids style
+      // recalc thrash from sub-pixel jitter.
+      const ratio = durationMs > 0 ? pos / durationMs : 0;
+      const clamped = Math.max(0, Math.min(1, ratio));
+      if (Math.abs(clamped - lastFillRatio) > 0.001) {
+        fillEl.style.transform = 'scaleX(' + clamped.toFixed(4) + ')';
+        lastFillRatio = clamped;
+      }
+      // Time labels — only touch DOM when the displayed M:SS actually changed.
+      const cur = fmtTime(pos);
+      const tot = fmtTime(durationMs);
+      if (cur !== lastCurTime) { setText(curTimeEl, cur); lastCurTime = cur; }
+      if (tot !== lastTotTime) { setText(totTimeEl, tot); lastTotTime = tot; }
+    }
+
     async function pollOnce() {
       try {
         const res = await fetch(HOST + '/api/media/now-playing');
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const np = await res.json();
+
         const title = np.hasSession ? (np.title || 'Unknown title') : 'Nothing playing';
         const artist = np.hasSession ? (np.artist || '') : '';
         if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
         if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
         setArt(!!np.hasArt && !!np.hasSession, np.artVersion ?? 0);
 
-        const isPlaying = np.status === 'Playing';
+        const playing = np.status === 'Playing';
+        isPlaying = playing;
         const canToggle = !!(np.canPlay || np.canPause);
-        setToggleState(isPlaying, canToggle);
+        setToggleState(playing, canToggle);
         lastCanPrev = setBtnEnabled(prevBtn, !!np.canGoPrevious, lastCanPrev);
         lastCanNext = setBtnEnabled(nextBtn, !!np.canGoNext, lastCanNext);
 
+        // Position handling — anchor on track change, on first poll, or on
+        // detected seek (delta past threshold). Otherwise let local extrap
+        // continue smoothly.
+        const serverPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
+        durationMs = typeof np.durationMs === 'number' ? np.durationMs : 0;
+        const trackKey = (np.title || '') + '|' + (np.artist || '');
+        const now = performance.now();
+
+        if (anchorAt === 0 || trackKey !== lastTrackKey) {
+          anchorPosMs = serverPos;
+          anchorAt = now;
+          lastTrackKey = trackKey;
+        } else {
+          const localExtrap = isPlaying ? anchorPosMs + (now - anchorAt) : anchorPosMs;
+          const delta = serverPos - localExtrap;
+          if (delta > SEEK_THRESHOLD_FORWARD || delta < -SEEK_THRESHOLD_BACKWARD) {
+            anchorPosMs = serverPos;
+            anchorAt = now;
+          }
+        }
+
         statusEl.classList.remove('err');
-        statusEl.textContent = 'media v2 · phase 3';
+        statusEl.textContent = 'media v2 · phase 4';
         flashPulse();
       } catch (e) {
         statusEl.classList.add('err');
@@ -277,6 +386,7 @@
 
     pollOnce();
     setInterval(pollOnce, POLL_MS);
+    setInterval(tick, TICK_MS);
   </script>
 </body>
 </html>
