@@ -1,0 +1,9 @@
+{
+  "extends": ["@tsconfig/svelte/tsconfig.json", "../../../tsconfig.base.json"],
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "src",
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte"]
+}

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <!-- Windows 10 SDK target enables WinRT projection: Windows.Media.Control
+         (GlobalSystemMediaTransportControlsSessionManager) and Windows.Storage
+         for album-art thumbnails. 19041 = 20H1 (May 2020), the floor we need. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BetterXeneonWidget.Host</RootNamespace>
+    <AssemblyName>BetterXeneonWidget.Host</AssemblyName>
+    <UserSecretsId>betterxeneon-host-dev</UserSecretsId>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

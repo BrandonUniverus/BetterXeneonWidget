@@ -1,0 +1,31 @@
+{
+  "name": "betterxeneonwidget",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Better widgets for the Corsair Xeneon Edge",
+  "workspaces": [
+    "src/shared",
+    "src/widgets/*"
+  ],
+  "scripts": {
+    "build:audio-switcher": "npm run build -w betterxeneon-audio-switcher",
+    "package:audio-switcher": "npm run package -w betterxeneon-audio-switcher",
+    "build:media": "npm run build -w betterxeneon-media",
+    "package:media": "npm run package -w betterxeneon-media",
+    "dev:media": "npm run dev -w betterxeneon-media",
+    "build:all": "npm run build --workspaces --if-present",
+    "package:all": "npm run package --workspaces --if-present",
+    "host:run": "dotnet run --project src/host/BetterXeneonWidget.Host",
+    "publish:host": "node tools/publish-host.mjs",
+    "build:installer": "node tools/build-installer.mjs",
+    "build:icon": "node tools/build-icon.mjs",
+    "build:icon-svg": "node tools/build-icon-svg.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5"
+  }
+}

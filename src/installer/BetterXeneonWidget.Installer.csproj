@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Plain net10.0-windows is enough — installer doesn't touch WinRT/SMTC,
+         only Win32 (registry, processes, cert store). The host carries its
+         own Win10 SDK target separately. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BetterXeneonWidget.Installer</RootNamespace>
+    <AssemblyName>BetterXeneonWidget.Installer</AssemblyName>
+    <!-- Icon shown in Explorer, taskbar, and the EXE's own properties.
+         Generated from icon.svg via tools/build-icon.mjs. -->
+    <ApplicationIcon>Resources\icon.ico</ApplicationIcon>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>embedded</DebugType>
+    <!-- Single-file bundle compresses .NET assemblies; the embedded payload.zip
+         is already a zip so further compression is a no-op for it. -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- The embedded payload is enormous (host exe is ~160 MB). Skip the
+         in-memory analyzer that scans embedded resources to keep build memory
+         sane. -->
+    <RestoreUseStaticGraphEvaluation>true</RestoreUseStaticGraphEvaluation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- payload.zip is produced by tools/build-installer.mjs immediately
+         before this project builds. It bundles the host exe, launcher.vbs,
+         appsettings.json, and both .icuewidget files. -->
+    <EmbeddedResource Include="Resources\payload.zip" LogicalName="payload.zip" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,25 @@
+{
+  "name": "betterxeneon-audio-switcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Switch the Windows default audio device and control system volume from the Xeneon Edge.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "package": "node scripts/package.mjs",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@betterxeneon/shared": "*"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tsconfig/svelte": "^5.0.4",
+    "svelte": "^5.20.0",
+    "svelte-check": "^4.1.5",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vite-plugin-singlefile": "^2.1.0"
+  }
+}
