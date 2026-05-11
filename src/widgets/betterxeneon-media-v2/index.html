@@ -258,24 +258,27 @@
     }
     .queue-btn {
       flex: 0 0 auto;
-      width: 28px;
-      height: 28px;
+      width: 38px;
+      height: 38px;
       border-radius: 50%;
       border: none;
       background: rgba(255, 255, 255, 0.08);
-      color: #fff;
+      color: #1db954;        /* tint the glyph green by default — clearer affordance */
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
       padding: 0;
       touch-action: manipulation;
-      transition: background 80ms;
+      transition: background 80ms, color 80ms;
     }
-    .queue-btn:hover, .queue-btn:active, .queue-btn.active {
-      background: rgba(29, 185, 84, 0.4);
+    .queue-btn:hover, .queue-btn:active { background: rgba(29, 185, 84, 0.2); }
+    .queue-btn.active {
+      background: #1db954;
+      color: #08130c;        /* invert when active — same treatment as play button */
     }
-    .queue-btn svg { width: 55%; height: 55%; pointer-events: none; }
+    .queue-btn.hidden { display: none; }
+    .queue-btn svg { width: 60%; height: 60%; pointer-events: none; }
 
     /* List view (queue or playlists) — fills the same slot the lyrics
        container does in the content column. */
@@ -340,6 +343,52 @@
       font-size: 12px;
       opacity: 0.5;
     }
+
+    /* List-view header — only used in playlists mode for now, holds the
+       back affordance + a title so the user clearly understands they've
+       left the now-playing context. */
+    .list-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 2px 4px 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      margin-bottom: 6px;
+    }
+    .list-back {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(29, 185, 84, 0.15);
+      border: none;
+      color: #1db954;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 6px;
+      touch-action: manipulation;
+      transition: background 80ms;
+    }
+    .list-back:hover, .list-back:active { background: rgba(29, 185, 84, 0.3); }
+    .list-back svg { width: 14px; height: 14px; pointer-events: none; }
+    .list-header .lh-title {
+      flex: 1 1 auto;
+      font-size: 13px;
+      font-weight: 600;
+      opacity: 0.85;
+    }
+
+    /* Playlists mode hides the bottom bar (progress / transport / status)
+       to make it visually obvious the user is in browse mode, not in
+       now-playing. They get back via the explicit back button in the
+       list header, the lib button is offscreen so there's no ambiguity
+       about what tapping it does. */
+    .root.playlists-mode .progress,
+    .root.playlists-mode .transport,
+    .root.playlists-mode .phase { display: none; }
 
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
@@ -511,13 +560,15 @@
         <div class="header-right">
           <div class="upnext-chip empty" id="upnext"><span class="label">Up next</span><span id="upnextText"></span></div>
           <button class="queue-btn" id="queueBtn" type="button" aria-label="Show queue" title="Show queue">
+            <!-- Spotify-style queue glyph: three horizontal bars (top two
+                 full width, bottom shorter) + a play triangle to the right
+                 of the bottom bar. Reads instantly as "what's next in
+                 line" rather than the generic hamburger. -->
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <line x1="8" y1="6" x2="21" y2="6"/>
-              <line x1="8" y1="12" x2="21" y2="12"/>
-              <line x1="8" y1="18" x2="21" y2="18"/>
-              <line x1="3" y1="6" x2="3.01" y2="6"/>
-              <line x1="3" y1="12" x2="3.01" y2="12"/>
-              <line x1="3" y1="18" x2="3.01" y2="18"/>
+              <line x1="3" y1="6"  x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="12" y2="18"/>
+              <path d="M16 15.5l5 2.5-5 2.5z" fill="currentColor" stroke="none"/>
             </svg>
           </button>
         </div>
@@ -644,7 +695,12 @@
 
     // Spotify state — populated by the slow Spotify poll. Up-next is the
     // head of the queue; library is the user's playlists.
-    const SPOTIFY_QUEUE_MS = 6000;
+    // 10s cadence on the queue is the sweet spot — Spotify rate-limits
+    // /me/player/queue together with /me/player, so we want to stay well
+    // below ~30 calls/min combined. The "up next" line and the queue list
+    // tolerate a 10s refresh visually (no scrubbing, no second-by-second
+    // accuracy needed).
+    const SPOTIFY_QUEUE_MS = 10000;
     const SPOTIFY_PLAYLISTS_MS = 600000;   // 10 minutes
     let spotifyQueue = [];
     let spotifyPlaylists = [];
@@ -836,7 +892,8 @@
     const CONNECT_SVG =
       '<circle cx="12" cy="12" r="10"/>' +
       '<path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>';
-    function setLibMode(authed) {
+    function setLibMode() {
+      const authed = spotifyAuthed;
       const mode = authed ? 'playlists' : 'connect';
       if (mode === lastLibMode) return;
       lastLibMode = mode;
@@ -1000,10 +1057,23 @@
       lyricsEl.classList.toggle('hidden', showList);
       listViewEl.classList.toggle('hidden', !showList);
 
-      // Active class on the buttons mirrors the user's explicit choice,
-      // not the effective view — e.g. on a lyric-less track in the
-      // default state, the queue is showing but the queue button stays
-      // inactive (a lyrics-less track isn't a user choice).
+      // Playlists view hides the bottom bar (progress + transport +
+      // status) — the user is in "browse mode" and the now-playing chrome
+      // is just visual noise. They get back via the back button in the
+      // list header.
+      rootEl.classList.toggle('playlists-mode', currentView === 'playlists');
+
+      // Queue button is redundant when the queue is the visible content
+      // (tapping it would toggle to lyrics, but if there are no lyrics
+      // we'd be sent right back here — confusing). Hide it in that case.
+      // Stays visible when on lyrics (so the user can switch to queue) or
+      // on playlists (so the user can jump to queue without going through
+      // the lyrics step).
+      const queueIsCenter = showList && currentView !== 'playlists';
+      queueBtn.classList.toggle('hidden', queueIsCenter);
+      // Active class mirrors the user's explicit choice, not the
+      // effective view — a lyrics-less track's auto-fallback shouldn't
+      // light the toggle up.
       queueBtn.classList.toggle('active', currentView === 'queue');
       libBtn.classList.toggle('active', currentView === 'playlists');
 
@@ -1053,6 +1123,25 @@
 
     function renderPlaylistsList() {
       const frag = document.createDocumentFragment();
+
+      // Header: back button + title. Anchors the user — without the
+      // bottom transport visible there'd be no return affordance.
+      const header = document.createElement('div');
+      header.className = 'list-header';
+      const back = document.createElement('button');
+      back.className = 'list-back';
+      back.type = 'button';
+      back.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M15 18l-6-6 6-6"/></svg><span>Back</span>';
+      back.addEventListener('click', () => setView('lyrics'));
+      const title = document.createElement('div');
+      title.className = 'lh-title';
+      title.textContent = 'Your playlists';
+      header.appendChild(back);
+      header.appendChild(title);
+      frag.appendChild(header);
+
       if (spotifyPlaylists.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'list-empty';
@@ -1068,7 +1157,12 @@
           const img = document.createElement('img');
           img.className = 'lr-art';
           img.alt = '';
-          if (pl.albumArtUrl) img.src = pl.albumArtUrl;
+          // SpotifyPlaylistDto serializes as `imageUrl` (the DTO field
+          // is ImageUrl, not AlbumArtUrl like SpotifyQueueItemDto).
+          // Falling back to albumArtUrl preserves compatibility if the
+          // host DTO is ever realigned.
+          const cover = pl.imageUrl || pl.albumArtUrl;
+          if (cover) img.src = cover;
           const meta = document.createElement('div');
           meta.className = 'lr-meta';
           const name = document.createElement('div');
@@ -1333,14 +1427,14 @@
 
         const wasAuthed = spotifyAuthed;
         spotifyAuthed = !!ss.connected;
-        setLibMode(spotifyAuthed);
-
-        if (spotifyAuthed) {
-          try {
-            const pbRes = await fetch(HOST + '/api/spotify/playback');
-            if (pbRes.ok) await pbRes.json();
-          } catch { /* non-fatal */ }
-        }
+        setLibMode();
+        // (No /api/spotify/playback poll here.) SMTC already gives us
+        // title/artist/album/position/duration/state for the local audio
+        // session, and that's all this widget consumes. /me/player was
+        // being fetched and thrown away every 1.5s — ~40 Spotify API calls
+        // per minute for no rendered output. The endpoint stays available
+        // on the host (some future "playing on [Device X]" affordance
+        // would want it), but the widget doesn't poll it.
 
         // Auth flipped — kick the slow Spotify pollers (queue + playlists)
         // immediately on first connect, and stop them on disconnect.
