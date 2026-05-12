@@ -76,6 +76,23 @@ public static class AudioEndpoints
             return Results.File(bytes, "image/png");
         });
 
+        // SteelSeries Sonar output device cycling. /status returns whether
+        // Sonar is reachable + the current "all-output" device + the full
+        // device list. /swap cycles to the next physical device (mirrors
+        // the Sonar hotkey). /probe is a debug dump for iterating on the
+        // parse logic when the response shape doesn't match expectations.
+        group.MapGet("/steelseries/status", async (SteelSeriesService svc, CancellationToken ct) =>
+            await svc.GetStatusAsync(ct));
+
+        group.MapPost("/steelseries/swap", async (SteelSeriesService svc, CancellationToken ct) =>
+        {
+            var result = await svc.CycleNextAsync(ct);
+            return result.Ok ? Results.Ok(result) : Results.Json(result, statusCode: 502);
+        });
+
+        group.MapGet("/steelseries/probe", async (SteelSeriesService svc, CancellationToken ct) =>
+            Results.Json(await svc.ProbeAsync(ct)));
+
         return app;
     }
 }

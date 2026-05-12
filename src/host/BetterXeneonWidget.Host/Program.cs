@@ -54,6 +54,10 @@ try
     // eagerly so by the time the first client hits the stream endpoint
     // there's already real data flowing.
     builder.Services.AddSingleton<AudioSpectrumService>();
+    // SteelSeries Sonar bridge. Lazy — won't actually try to reach Sonar
+    // until the widget asks for status / swaps an output, so missing GG
+    // installs cost nothing at startup.
+    builder.Services.AddSingleton<SteelSeriesService>();
 
     builder.Services.Configure<SpotifyOptions>(builder.Configuration.GetSection("Spotify"));
     builder.Services.AddSingleton<SpotifyTokenStore>();

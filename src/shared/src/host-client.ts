@@ -30,6 +30,33 @@ export interface VolumeState {
   muted: boolean;
 }
 
+/**
+ * Snapshot of SteelSeries Sonar's "ALL OUTPUT DEVICES" panel — which
+ * physical devices Sonar knows about and which one is currently selected
+ * as Sonar's master output. `available: false` means the host couldn't
+ * reach Sonar (GG not running, port discovery failed, etc.); the rest of
+ * the fields will be null/empty in that case.
+ */
+export interface SteelSeriesStatus {
+  available: boolean;
+  currentDeviceName: string | null;
+  currentDeviceId: string | null;
+  devices: SteelSeriesDevice[];
+}
+
+export interface SteelSeriesDevice {
+  id: string;
+  name: string;
+  isCurrent: boolean;
+}
+
+export interface SteelSeriesSwapResult {
+  ok: boolean;
+  newDeviceName: string | null;
+  newDeviceId: string | null;
+  error: string | null;
+}
+
 export interface AccentColor {
   hex: string;
 }
@@ -202,6 +229,29 @@ export class HostClient {
 
   async setSessionMute(id: string, muted: boolean): Promise<void> {
     await this.send('/api/audio/sessions/mute', { id, muted });
+  }
+
+  // ---------- SteelSeries Sonar (output device cycling) ----------
+
+  async getSteelSeriesStatus(): Promise<SteelSeriesStatus> {
+    return this.json<SteelSeriesStatus>('/api/audio/steelseries/status');
+  }
+
+  /**
+   * Cycles Sonar's master output to the next physical device. Resolves with
+   * the new device on success; throws on transport errors. A 502 response
+   * (Sonar unreachable, or some channel PUT failed mid-swap) is surfaced as
+   * an Error with the body message.
+   */
+  async swapSteelSeriesOutput(): Promise<SteelSeriesSwapResult> {
+    const res = await this.fetchImpl(`${this.baseUrl}/api/audio/steelseries/swap`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const body = (await res.json()) as SteelSeriesSwapResult;
+    if (!res.ok && !body.error) throw new Error(`/api/audio/steelseries/swap → ${res.status}`);
+    return body;
   }
 
   // ---------- System ----------
