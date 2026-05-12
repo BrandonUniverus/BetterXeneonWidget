@@ -30,6 +30,14 @@ export interface AppStateValue {
    * polling.ts; not persisted across reloads.
    */
   lastSoundAtBySessionId: Record<string, number>;
+  /**
+   * Latest snapshot of the shared widget-settings blob (the same JSON the
+   * media widget reads/writes). Polled periodically so audio-switcher can
+   * mirror the media widget's chosen theme accent. Only a subset of keys
+   * are read here — `theme: 0..5` drives the accent — everything else is
+   * ignored. Null until the first successful fetch.
+   */
+  widgetSettings: Record<string, unknown> | null;
 }
 
 const initial: AppStateValue = {
@@ -46,6 +54,7 @@ const initial: AppStateValue = {
   configLoaded: false,
   configInitialized: false,
   lastSoundAtBySessionId: {},
+  widgetSettings: null,
 };
 
 export const appStore = writable<AppStateValue>(initial);

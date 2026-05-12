@@ -180,6 +180,16 @@ export class HostClient {
     await this.send('/api/config/pins', { pinnedIds });
   }
 
+  /**
+   * Returns the shared widget-settings JSON object — the same blob the media
+   * widget uses to persist its theme/options. Untyped because both widgets
+   * push arbitrary keys into it; callers should pick out the keys they care
+   * about and tolerate missing or unexpected values.
+   */
+  async getWidgetSettings(): Promise<Record<string, unknown>> {
+    return this.json<Record<string, unknown>>('/api/widget/settings');
+  }
+
   // ---------- Sessions (apps mixer) ----------
 
   async listSessions(): Promise<AudioSession[]> {
