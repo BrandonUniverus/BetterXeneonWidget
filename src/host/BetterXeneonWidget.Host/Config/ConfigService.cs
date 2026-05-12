@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace BetterXeneonWidget.Host.Config;
 
@@ -28,7 +29,7 @@ public sealed class ConfigService
         _path = Path.Combine(dir, "config.json");
     }
 
-    private static ConfigDto Empty() => new(Array.Empty<string>(), false, null);
+    private static ConfigDto Empty() => new(Array.Empty<string>(), false, null, null);
 
     public ConfigDto Read()
     {
@@ -85,6 +86,19 @@ public sealed class ConfigService
         Update(c => c with { AudioCaptureDeviceId = string.IsNullOrWhiteSpace(deviceId) ? null : deviceId });
 
     public string? ReadAudioCaptureDeviceId() => Read().AudioCaptureDeviceId;
+
+    /// <summary>
+    /// Settings owned by the widget UI (poll cadence, lyric options,
+    /// listening-view mode, theme, etc.). Stored as an opaque JSON
+    /// object so adding a new setting doesn't require touching this
+    /// host code — the widget POSTs the full settings object and we
+    /// store it verbatim. Round-trips through JsonNode so we don't
+    /// re-stringify on every read.
+    /// </summary>
+    public JsonObject ReadWidgetSettings() => Read().WidgetSettings ?? new JsonObject();
+
+    public void WriteWidgetSettings(JsonObject settings) =>
+        Update(c => c with { WidgetSettings = settings });
 }
 
 public sealed record ConfigDto(
@@ -98,7 +112,14 @@ public sealed record ConfigDto(
     /// etc.) pick the specific virtual device carrying their music
     /// without changing their Windows default output.
     /// </summary>
-    string? AudioCaptureDeviceId);
+    string? AudioCaptureDeviceId,
+    /// <summary>
+    /// Settings object owned by the widget UI — opaque to the host. The
+    /// widget POSTs the full settings object on change; we persist it
+    /// verbatim, return it verbatim on the next GET. Lets us add new
+    /// widget settings without touching the host schema.
+    /// </summary>
+    JsonObject? WidgetSettings);
 
 public sealed record SetPinsRequest(string[] PinnedIds);
 public sealed record SetAudioCaptureSourceRequest(string? DeviceId);

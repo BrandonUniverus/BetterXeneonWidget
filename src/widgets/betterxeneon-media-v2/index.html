@@ -6,104 +6,14 @@
   <title>tr('Better Media v2')</title>
   <link rel="icon" type="image/svg+xml" href="resources/icon.svg">
 
-  <!-- Behavior options. Each one becomes a setting in the widget's iCUE
-       panel. The widget reads them via globalThis.<name>. We poll those
-       globals on the same tick as the host fetches and dispatch onChange
-       when a value actually moved. None of these drive paint — they
-       affect logic (polling cadence, lyric visibility, sync offset).
-       Appearance options are deliberately NOT here yet — they're being
-       added back in a later flicker-isolation step. -->
-  <meta name="x-icue-property" content="pollIntervalMs"
-        data-label="tr('Polling Interval (ms)')"
-        data-type="slider"
-        data-default="1500"
-        data-min="500"
-        data-max="5000"
-        data-step="100">
-
-  <meta name="x-icue-property" content="autoExpand"
-        data-label="tr('Auto-expand to listening view when idle')"
-        data-type="switch"
-        data-default="true">
-
-  <meta name="x-icue-property" content="autoExpandAfterSec"
-        data-label="tr('Idle delay before expanding (seconds)')"
-        data-type="slider"
-        data-default="30"
-        data-min="10"
-        data-max="120"
-        data-step="5">
-
-  <meta name="x-icue-property" content="showLyrics"
-        data-label="tr('Show synced lyrics in listening view')"
-        data-type="switch"
-        data-default="true">
-
-  <meta name="x-icue-property" content="lyricSyncOffsetMs"
-        data-label="tr('Lyric sync offset (ms)')"
-        data-type="slider"
-        data-default="0"
-        data-min="-2000"
-        data-max="2000"
-        data-step="50">
-
-  <!-- Listening view mode. The "ambient" full-screen state the widget
-       expands to after autoExpandAfterSec seconds of idle. Slider with
-       discrete stops because iCUE doesn't expose a dropdown control:
-         0 = Lyrics       — keep the metadata + lyrics, hide bottom bar
-         1 = Album cover  — center the album art, hide everything else
-         2 = Equalizer    — real-time spectrum bars (WASAPI loopback) -->
-  <meta name="x-icue-property" content="listeningView"
-        data-label="tr('Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer)')"
-        data-type="slider"
-        data-default="0"
-        data-min="0"
-        data-max="2"
-        data-step="1">
-
-  <!-- Equalizer as background. When on, the blurred album-art layer is
-       swapped for a centered spectrum visualization behind the content.
-       Stacks on top of the host's WASAPI loopback FFT — so the bars are
-       always synced to whatever's actually playing on the system, not a
-       loop. -->
-  <meta name="x-icue-property" content="eqBackground"
-        data-label="tr('Use equalizer as background (instead of album art blur)')"
-        data-type="switch"
-        data-default="false">
-
-  <!-- Theme — drives every accent color in the widget: play button,
-       progress fill, source chip, current-lyric color, lib/queue buttons,
-       active states, pulse indicator, list-row hovers, AND the equalizer
-       bar palette. One slider, total visual coherence.
-         0 = Album       — accent derived from current cover art; bars use
-                           single album-gradient (same color all bars)
-         1 = Rainbow     — hot-pink accent; bars cycle the full hue wheel
-         2 = Neon        — cyan accent; bars morph cyan↔magenta↔yellow
-         3 = Sunset      — pink accent; bars red→orange→purple→red
-         4 = Aurora      — teal accent; bars teal→green→violet (reference)
-         5 = Mono        — white accent; bars greyscale ramp -->
-  <meta name="x-icue-property" content="theme"
-        data-label="tr('Theme (0=Album, 1=Rainbow, 2=Neon, 3=Sunset, 4=Aurora, 5=Mono)')"
-        data-type="slider"
-        data-default="0"
-        data-min="0"
-        data-max="5"
-        data-step="1">
-
-  <!-- When equalizer is background, hide the foreground album cover by
-       default (matches the atmosphere-mode reference design). Flip on
-       to keep the cover visible alongside the bars. -->
-  <meta name="x-icue-property" content="eqShowAlbumArt"
-        data-label="tr('Show album art alongside equalizer background')"
-        data-type="switch"
-        data-default="false">
-
-  <script id="x-icue-groups" type="application/json">
-    [
-      { "title": "tr('Behavior')", "properties": ["pollIntervalMs", "showLyrics", "lyricSyncOffsetMs"] },
-      { "title": "tr('Listening View')", "properties": ["autoExpand", "autoExpandAfterSec", "listeningView", "eqBackground", "theme", "eqShowAlbumArt"] }
-    ]
-  </script>
+  <!-- All user-facing settings live INSIDE the widget now (Settings
+       button in the top-right header → opens an in-widget settings view).
+       Persistence is via the host at GET/POST /api/widget/settings, which
+       stores values in %APPDATA%\BetterXeneonWidget\config.json. The iCUE
+       settings panel deliberately exposes nothing for this widget — one
+       source of truth keeps the UX coherent and lets us add new settings
+       without re-registering iCUE meta tags. -->
+  <script id="x-icue-groups" type="application/json">[]</script>
 
   <style>
     /* ---- Theme system ----------------------------------------------------
@@ -472,6 +382,142 @@
       opacity: 0.55;
     }
 
+    /* --- Settings view controls -----------------------------------------
+       Rendered inside listView when currentView === 'settings'. Section
+       titles + rows of label + control (switch / segmented / slider). */
+    .settings-section {
+      margin-bottom: 10px;
+    }
+    .settings-section-title {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      opacity: 0.55;
+      padding: 12px 8px 6px;
+      color: var(--theme-accent);
+    }
+    .settings-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 8px;
+      border-radius: 6px;
+    }
+    .settings-row .settings-meta {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .settings-row .settings-name {
+      font-weight: 600;
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .settings-row .settings-sub {
+      font-size: 11px;
+      opacity: 0.55;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Pill toggle — like Spotify's settings toggles. */
+    .settings-toggle {
+      flex: 0 0 auto;
+      width: 44px;
+      height: 24px;
+      border-radius: 999px;
+      border: none;
+      background: rgba(255, 255, 255, 0.15);
+      position: relative;
+      cursor: pointer;
+      padding: 0;
+      touch-action: manipulation;
+      transition: background 180ms;
+    }
+    .settings-toggle[data-on="1"] { background: var(--theme-accent); }
+    .settings-toggle-thumb {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 180ms;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+    .settings-toggle[data-on="1"] .settings-toggle-thumb { transform: translateX(20px); }
+
+    /* Segmented control — row of buttons, one active. */
+    .settings-row-segment { flex-direction: column; align-items: stretch; }
+    .settings-row-segment .settings-meta { margin-bottom: 6px; }
+    .settings-seg {
+      display: flex;
+      gap: 2px;
+      background: rgba(255, 255, 255, 0.07);
+      padding: 3px;
+      border-radius: 7px;
+    }
+    .settings-seg button {
+      flex: 1 1 0;
+      min-width: 0;
+      padding: 6px 4px;
+      border: none;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      touch-action: manipulation;
+      transition: background 150ms, color 150ms;
+    }
+    .settings-seg button.active {
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);
+    }
+    .settings-seg button:not(.active):hover { background: rgba(255, 255, 255, 0.05); }
+
+    /* Slider — native range, themed. */
+    .settings-row-slider { flex-direction: column; align-items: stretch; }
+    .settings-row-slider .settings-meta { margin-bottom: 4px; }
+    .settings-row-slider .settings-meta {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .settings-row-slider .settings-value {
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      color: var(--theme-accent);
+      font-weight: 600;
+    }
+    .settings-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    .settings-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--theme-accent);
+      cursor: pointer;
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+
     /* List-view header — only used in playlists mode for now, holds the
        back affordance + a title so the user clearly understands they've
        left the now-playing context. */
@@ -515,6 +561,16 @@
     .root.playlists-mode .progress,
     .root.playlists-mode .phase,
     .root.playlists-mode .header-right { display: none; }
+
+    /* Settings mode hides progress + phase like playlists-mode but
+       KEEPS .header-right visible (so the settings gear button stays
+       reachable for the user to tap-to-dismiss). Hide the up-next chip
+       and queue button inside header-right since their context is gone;
+       only the settings button remains. */
+    .root.settings-mode .progress,
+    .root.settings-mode .phase { display: none; }
+    .root.settings-mode .upnext-chip,
+    .root.settings-mode .queue-btn:not(.settings-btn) { display: none; }
 
     /* -- Listening (screensaver) mode --------------------------------------
        Three sub-modes, gated by the iCUE Listening view dropdown. The
@@ -853,6 +909,15 @@
               <path d="M16 15.5l5 2.5-5 2.5z" fill="currentColor" stroke="none"/>
             </svg>
           </button>
+          <!-- Settings button — opens the in-widget settings view.
+               Shares the queue-btn shape/styling so the header-right
+               trio reads as a uniform control group. -->
+          <button class="queue-btn settings-btn" id="settingsBtn" type="button" aria-label="Settings" title="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
         </div>
       </div>
       <!-- Horizon line — visible reference at the spectrum's max-peak
@@ -917,55 +982,83 @@
     let pollTimer = null;
     function startPollTimer() {
       if (pollTimer) clearInterval(pollTimer);
-      pollTimer = setInterval(() => { pollOnce(); pollIcueOptions(); }, pollIntervalMs);
+      pollTimer = setInterval(() => { pollOnce(); }, pollIntervalMs);
     }
 
-    // ---- iCUE option sync framework -------------------------------------
-    // Two delivery paths from iCUE → us:
-    //   1. icueEvents.onDataUpdated fires on user setting changes (event-
-    //      based path; immediate response).
-    //   2. Polling the globals every poll tick as a fallback for QtWebEngine
-    //      builds that drop the event.
-    // Reading the global also has a quirk: some builds inject the property
-    // as a `var` that globalThis[name] can't see (script-context vs window).
-    // The Function() eval trick resolves the identifier through the scope
-    // chain. Adding a new option = one register call.
-    const icueOptions = [];
-    function readIcueOption(name, defaultValue) {
-      const w = globalThis;
-      if (Object.prototype.hasOwnProperty.call(w, name)) {
-        const v = w[name];
-        if (v !== undefined && v !== null && v !== '') return v;
-      }
+    // ---- Widget settings (host-backed) ---------------------------------
+    // Settings live in the widget UI now, persisted via the host at
+    // GET/POST /api/widget/settings (→ %APPDATA%\BetterXeneonWidget\
+    // config.json). The Settings button in the header opens the in-widget
+    // settings view; controls in that view drive updateSetting(key, value)
+    // which both fires the registered handler AND POSTs the full settings
+    // object back to the host. Saves are debounced so a slider drag
+    // doesn't generate a hundred POSTs.
+    //
+    // Adding a new setting:
+    //   1. Add a key + default to SETTING_DEFAULTS
+    //   2. Add a row to SETTING_DEFS (the schema for the settings UI)
+    //   3. Call registerSetting(key, handler) where you want the value
+    const SETTING_DEFAULTS = Object.freeze({
+      pollIntervalMs: 1500,
+      autoExpand: true,
+      autoExpandAfterSec: 30,
+      showLyrics: true,
+      lyricSyncOffsetMs: 0,
+      listeningView: 0,
+      eqBackground: false,
+      eqShowAlbumArt: false,
+      theme: 0,
+    });
+    const settings = { ...SETTING_DEFAULTS };
+    const settingHandlers = {};
+
+    function registerSetting(key, onChange) {
+      settingHandlers[key] = onChange;
+      // Fire immediately with whatever's currently in `settings`
+      // (defaults at module-init time; loadSettings will re-fire with
+      // the host-backed value if it differs).
+      onChange(settings[key]);
+    }
+
+    async function loadSettings() {
       try {
-        const v = Function('return typeof ' + name + ' !== "undefined" ? ' + name + ' : undefined')();
-        if (v !== undefined && v !== null && v !== '') return v;
-      } catch { /* not defined */ }
-      return defaultValue;
-    }
-    function registerIcueOption(name, defaultValue, onChange) {
-      const initial = readIcueOption(name, defaultValue);
-      icueOptions.push({ name, defaultValue, last: initial, onChange });
-      onChange(initial);
-    }
-    function pollIcueOptions() {
-      for (const entry of icueOptions) {
-        const cur = readIcueOption(entry.name, entry.defaultValue);
-        if (cur !== entry.last) {
-          entry.last = cur;
-          entry.onChange(cur);
+        const r = await fetch(HOST + '/api/widget/settings');
+        if (!r.ok) return;
+        const stored = await r.json();
+        for (const key of Object.keys(SETTING_DEFAULTS)) {
+          if (key in stored) {
+            const newValue = stored[key];
+            if (newValue !== settings[key]) {
+              settings[key] = newValue;
+              if (settingHandlers[key]) settingHandlers[key](newValue);
+            }
+          }
         }
-      }
+      } catch { /* offline — defaults already loaded */ }
     }
-    // Bare assignment to globalThis on purpose — the runtime bridge uses
-    // property descriptors that don't see lexically-scoped declarations,
-    // so the handlers must live directly on the global object.
-    globalThis.icueEvents = {
-      onICUEInitialized: () => pollIcueOptions(),
-      onDataUpdated: () => pollIcueOptions(),
-    };
-    if (globalThis.iCUE_initialized) {
-      pollIcueOptions();
+
+    let _saveTimer = null;
+    function saveSettings() {
+      // Debounce — slider drags fire dozens of updateSetting calls per
+      // second. Coalesce to one POST 300ms after the last change.
+      if (_saveTimer) clearTimeout(_saveTimer);
+      _saveTimer = setTimeout(async () => {
+        _saveTimer = null;
+        try {
+          await fetch(HOST + '/api/widget/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(settings),
+          });
+        } catch { /* surfaced by next attempt */ }
+      }, 300);
+    }
+
+    function updateSetting(key, value) {
+      if (settings[key] === value) return;
+      settings[key] = value;
+      if (settingHandlers[key]) settingHandlers[key](value);
+      saveSettings();
     }
 
     // Live snapshots of each Behavior option. The auto-expand pair is
@@ -1008,6 +1101,10 @@
     let audioSources = [];
     let audioSourceActiveId = null;
     let audioSourceActiveName = '';
+    // Tracks where the user opened the audio-source view from, so the
+    // back button + auto-return-on-pick land them back in their
+    // entry-point view (playlists or settings).
+    let audioSourceFrom = 'playlists';
 
     // Listening (screensaver) mode state. Auto-expands when the user
     // hasn't interacted for autoExpandAfterSec, exits on any touch /
@@ -1043,6 +1140,7 @@
     const upnextEl = document.getElementById('upnext');
     const upnextTextEl = document.getElementById('upnextText');
     const queueBtn = document.getElementById('queueBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
     const listViewEl = document.getElementById('listView');
     const titleEl = document.getElementById('title');
     const artistEl = document.getElementById('artist');
@@ -1267,9 +1365,9 @@
         try { await fetch(HOST + '/api/spotify/connect', { method: 'POST' }); }
         catch { /* surfaced by next poll's status */ }
       } else if (currentView === 'audio-source') {
-        // Inside the audio-source sub-view → tap back goes to playlists
-        // (where we came from), not all the way out to lyrics.
-        setView('playlists');
+        // Inside the audio-source sub-view → tap back goes to wherever
+        // the picker was opened from (playlists or settings).
+        setView(audioSourceFrom);
       } else {
         // Authed and on lyrics/queue/playlists: toggle playlists view.
         setView(currentView === 'playlists' ? 'lyrics' : 'playlists');
@@ -1277,6 +1375,9 @@
     });
     queueBtn.addEventListener('click', () => {
       setView(currentView === 'queue' ? 'lyrics' : 'queue');
+    });
+    settingsBtn.addEventListener('click', () => {
+      setView(currentView === 'settings' ? 'lyrics' : 'settings');
     });
 
     // --- Up-next renderer + Spotify queue/playlists pollers --------------
@@ -1391,8 +1492,8 @@
           audioSourceActiveName = s.activeName || '';
         }
       } catch { /* surfaced by next refresh */ }
-      // After picking, go back to playlists (where the user came from).
-      setView('playlists');
+      // After picking, go back to wherever the user opened the picker from.
+      setView(audioSourceFrom);
     }
 
     async function disconnectSpotify() {
@@ -1406,8 +1507,9 @@
 
     function listVisible() {
       // True when the list-view slot is the visible one: either the
-      // user is on queue/playlists, or the default 'lyrics' state has
-      // fallen back to queue because there are no lyrics to show.
+      // user is on queue/playlists/audio-source/settings, or the default
+      // 'lyrics' state has fallen back to queue because there are no
+      // lyrics to show.
       if (currentView !== 'lyrics') return true;
       return parsedLyrics.length === 0 || !optShowLyrics;
     }
@@ -1511,6 +1613,67 @@
     };
     // (THEME_NAMES is declared earlier — it shares the same 0..5 mapping
     // as both palette dispatch and CSS theme class application.)
+
+    // --- Settings UI schema ----------------------------------------------
+    // Renders the in-widget Settings view. Each entry describes one
+    // setting's UI: how to label it, what kind of control to draw, what
+    // values it accepts. The actual value lives in `settings[key]`; the
+    // handler runs when the user changes it via the rendered control.
+    const SETTING_SECTIONS = [
+      {
+        title: 'General',
+        items: [
+          { key: 'showLyrics', type: 'switch',
+            label: 'Show lyrics',
+            sub: 'Show synced lyrics when available' },
+          { key: 'lyricSyncOffsetMs', type: 'slider',
+            label: 'Lyric sync offset',
+            min: -2000, max: 2000, step: 50, unit: 'ms' },
+          { key: 'pollIntervalMs', type: 'slider',
+            label: 'Poll interval',
+            sub: 'How often the widget refreshes',
+            min: 500, max: 5000, step: 100, unit: 'ms' },
+        ],
+      },
+      {
+        title: 'Listening View',
+        items: [
+          { key: 'autoExpand', type: 'switch',
+            label: 'Auto-expand when idle',
+            sub: 'Show ambient view after no interaction' },
+          { key: 'autoExpandAfterSec', type: 'slider',
+            label: 'Idle delay',
+            min: 10, max: 120, step: 5, unit: 's' },
+          { key: 'listeningView', type: 'segment',
+            label: 'Mode',
+            options: [
+              { value: 0, label: 'Lyrics' },
+              { value: 1, label: 'Album' },
+              { value: 2, label: 'EQ' },
+            ] },
+        ],
+      },
+      {
+        title: 'Equalizer',
+        items: [
+          { key: 'eqBackground', type: 'switch',
+            label: 'Use as background',
+            sub: 'Show spectrum behind lyrics' },
+          { key: 'eqShowAlbumArt', type: 'switch',
+            label: 'Show album art alongside' },
+          { key: 'theme', type: 'segment',
+            label: 'Theme',
+            options: [
+              { value: 0, label: 'Album' },
+              { value: 1, label: 'Rainbow' },
+              { value: 2, label: 'Neon' },
+              { value: 3, label: 'Sunset' },
+              { value: 4, label: 'Aurora' },
+              { value: 5, label: 'Mono' },
+            ] },
+        ],
+      },
+    ];
 
     // --- Color helpers (RGB ↔ HSL) -------------------------------------
     // We extract a dominant RGB from the cover, then go via HSL so we can
@@ -2020,25 +2183,31 @@
       lyricsEl.classList.toggle('hidden', showList);
       listViewEl.classList.toggle('hidden', !showList);
 
-      // Playlists view hides the bottom bar (progress + transport +
-      // status) — the user is in "browse mode" and the now-playing chrome
-      // is just visual noise. They get back via the back button in the
-      // list header. Audio-source view rides the same class — it's a
-      // sub-view of playlists and shares the visual treatment.
+      // Browse-mode classes. playlists-mode is used by playlists +
+      // audio-source — full bottom-bar hide (and header-right hide so
+      // the up-next chip + queue button aren't visible while
+      // browsing). settings-mode is similar but KEEPS the header-right
+      // visible so the user can tap the settings button again to
+      // dismiss the panel.
       rootEl.classList.toggle('playlists-mode',
         currentView === 'playlists' || currentView === 'audio-source');
+      rootEl.classList.toggle('settings-mode', currentView === 'settings');
 
       // Queue button is redundant when the queue is the visible content
       // (tapping it would toggle to lyrics, but if there are no lyrics
       // we'd be sent right back here — confusing). Hide it in that case.
-      // Stays visible when on lyrics, playlists, or audio-source so the
-      // user can always jump to queue.
-      const queueIsCenter = showList && currentView !== 'playlists' && currentView !== 'audio-source';
+      // Stays visible when on lyrics, playlists, audio-source, or
+      // settings so the user can always jump to queue.
+      const queueIsCenter = showList
+        && currentView !== 'playlists'
+        && currentView !== 'audio-source'
+        && currentView !== 'settings';
       queueBtn.classList.toggle('hidden', queueIsCenter);
       // Active class mirrors the user's explicit choice, not the
       // effective view — a lyrics-less track's auto-fallback shouldn't
       // light the toggle up.
       queueBtn.classList.toggle('active', currentView === 'queue');
+      settingsBtn.classList.toggle('active', currentView === 'settings');
       libBtn.classList.toggle('active',
         currentView === 'playlists' || currentView === 'audio-source');
       // Lib button icon depends on currentView (back arrow in playlists
@@ -2050,6 +2219,8 @@
         renderPlaylistsList();
       } else if (currentView === 'audio-source') {
         renderAudioSourceList();
+      } else if (currentView === 'settings') {
+        renderSettingsList();
       } else {
         renderQueueList();
       }
@@ -2205,7 +2376,10 @@
       srcMeta.appendChild(srcSub);
       sourceRow.appendChild(srcIcon);
       sourceRow.appendChild(srcMeta);
-      sourceRow.addEventListener('click', () => setView('audio-source'));
+      sourceRow.addEventListener('click', () => {
+        audioSourceFrom = 'playlists';
+        setView('audio-source');
+      });
       frag.appendChild(sourceRow);
 
       // Disconnect lives at the bottom of the playlists list — only
@@ -2329,6 +2503,154 @@
           frag.appendChild(row);
         }
       }
+
+      listViewEl.textContent = '';
+      listViewEl.appendChild(frag);
+    }
+
+    // --- Settings view ---------------------------------------------------
+    // Builds the in-widget settings UI from SETTING_SECTIONS. Each row's
+    // control writes back through updateSetting(key, value) which both
+    // fires the registered handler AND debounces a POST to the host
+    // settings endpoint.
+
+    function renderSettingRow(item) {
+      const row = document.createElement('div');
+      row.className = 'settings-row settings-row-' + item.type;
+
+      const meta = document.createElement('div');
+      meta.className = 'settings-meta';
+      const name = document.createElement('div');
+      name.className = 'settings-name';
+      name.textContent = item.label;
+      meta.appendChild(name);
+      // For sliders, the sub-line doubles as the value display.
+      let valueDisplay = null;
+      if (item.type === 'slider') {
+        valueDisplay = document.createElement('div');
+        valueDisplay.className = 'settings-value';
+        const current = settings[item.key];
+        valueDisplay.textContent = current + (item.unit ? ' ' + item.unit : '');
+        meta.appendChild(valueDisplay);
+      } else if (item.sub) {
+        const sub = document.createElement('div');
+        sub.className = 'settings-sub';
+        sub.textContent = item.sub;
+        meta.appendChild(sub);
+      }
+      row.appendChild(meta);
+
+      const value = settings[item.key];
+
+      if (item.type === 'switch') {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'settings-toggle';
+        btn.dataset.on = value ? '1' : '0';
+        const thumb = document.createElement('span');
+        thumb.className = 'settings-toggle-thumb';
+        btn.appendChild(thumb);
+        btn.addEventListener('click', () => {
+          const next = !settings[item.key];
+          btn.dataset.on = next ? '1' : '0';
+          updateSetting(item.key, next);
+        });
+        row.appendChild(btn);
+      } else if (item.type === 'segment') {
+        const seg = document.createElement('div');
+        seg.className = 'settings-seg';
+        for (const opt of item.options) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = opt.label;
+          if (opt.value === value) b.classList.add('active');
+          b.addEventListener('click', () => {
+            // Visual update is local — no full re-render needed.
+            for (const sib of seg.children) sib.classList.remove('active');
+            b.classList.add('active');
+            updateSetting(item.key, opt.value);
+          });
+          seg.appendChild(b);
+        }
+        row.appendChild(seg);
+      } else if (item.type === 'slider') {
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.className = 'settings-slider';
+        input.min = String(item.min);
+        input.max = String(item.max);
+        input.step = String(item.step);
+        input.value = String(value);
+        input.addEventListener('input', () => {
+          const v = Number(input.value);
+          if (valueDisplay) valueDisplay.textContent = v + (item.unit ? ' ' + item.unit : '');
+          updateSetting(item.key, v);
+        });
+        row.appendChild(input);
+      }
+
+      return row;
+    }
+
+    function renderSettingsList() {
+      const frag = document.createDocumentFragment();
+
+      const header = document.createElement('div');
+      header.className = 'list-header';
+      const title = document.createElement('div');
+      title.className = 'lh-title';
+      title.textContent = 'Settings';
+      header.appendChild(title);
+      frag.appendChild(header);
+
+      for (const section of SETTING_SECTIONS) {
+        const sec = document.createElement('div');
+        sec.className = 'settings-section';
+        const stitle = document.createElement('div');
+        stitle.className = 'settings-section-title';
+        stitle.textContent = section.title;
+        sec.appendChild(stitle);
+        for (const item of section.items) sec.appendChild(renderSettingRow(item));
+        frag.appendChild(sec);
+      }
+
+      // Audio source entry-point — gateway to the dedicated audio-source
+      // sub-view (which we already render separately because it loads
+      // device data from the host).
+      const audioSection = document.createElement('div');
+      audioSection.className = 'settings-section';
+      const aTitle = document.createElement('div');
+      aTitle.className = 'settings-section-title';
+      aTitle.textContent = 'Audio source';
+      audioSection.appendChild(aTitle);
+      const aRow = document.createElement('button');
+      aRow.type = 'button';
+      aRow.className = 'list-row';
+      const aIcon = document.createElement('div');
+      aIcon.className = 'lr-art';
+      aIcon.style.display = 'flex';
+      aIcon.style.alignItems = 'center';
+      aIcon.style.justifyContent = 'center';
+      aIcon.style.fontSize = '18px';
+      aIcon.textContent = '🔊';
+      const aMeta = document.createElement('div');
+      aMeta.className = 'lr-meta';
+      const aName = document.createElement('div');
+      aName.className = 'lr-name';
+      aName.textContent = 'Equalizer audio source';
+      const aSub = document.createElement('div');
+      aSub.className = 'lr-sub';
+      aSub.textContent = audioSourceActiveName || 'System default';
+      aMeta.appendChild(aName);
+      aMeta.appendChild(aSub);
+      aRow.appendChild(aIcon);
+      aRow.appendChild(aMeta);
+      aRow.addEventListener('click', () => {
+        audioSourceFrom = 'settings';
+        setView('audio-source');
+      });
+      audioSection.appendChild(aRow);
+      frag.appendChild(audioSection);
 
       listViewEl.textContent = '';
       listViewEl.appendChild(frag);
@@ -2716,24 +3038,25 @@
       if (optTheme === 0) applyTheme();
     });
 
-    // Register Behavior options. The handler fires once at registration
-    // with the initial value, then again any time pollIcueOptions
-    // detects a change.
-    registerIcueOption('pollIntervalMs', 1500, value => {
+    // Register Settings handlers. Each registerSetting() fires its handler
+    // once immediately with the default value, then again when loadSettings
+    // resolves with the host-backed value (if different), and again every
+    // time the user changes the value via the in-widget Settings view.
+    registerSetting('pollIntervalMs', value => {
       const n = Number(value);
       pollIntervalMs = Number.isFinite(n) ? Math.max(500, Math.min(5000, n)) : 1500;
       // Restart the interval so the new cadence takes effect immediately
       // rather than waiting up to the OLD interval first.
       if (pollTimer) startPollTimer();
     });
-    registerIcueOption('autoExpand', true, value => {
+    registerSetting('autoExpand', value => {
       optAutoExpand = value !== false;
     });
-    registerIcueOption('autoExpandAfterSec', 30, value => {
+    registerSetting('autoExpandAfterSec', value => {
       const n = Number(value);
       optAutoExpandAfterSec = Number.isFinite(n) ? n : 30;
     });
-    registerIcueOption('showLyrics', true, value => {
+    registerSetting('showLyrics', value => {
       optShowLyrics = value !== false;
       if (!optShowLyrics) {
         // Toggling off: clear the rendered lyric list and drop the
@@ -2756,11 +3079,11 @@
         }
       }
     });
-    registerIcueOption('lyricSyncOffsetMs', 0, value => {
+    registerSetting('lyricSyncOffsetMs', value => {
       const n = Number(value);
       optLyricSyncOffsetMs = Number.isFinite(n) ? n : 0;
     });
-    registerIcueOption('listeningView', 0, value => {
+    registerSetting('listeningView', value => {
       const n = Number(value);
       optListeningView = Number.isFinite(n) ? Math.max(0, Math.min(2, Math.round(n))) : 0;
       // Re-apply if we're currently in listening mode so the user sees the
@@ -2771,19 +3094,25 @@
       // state — most notably, dropping the EQ stream when leaving submode 2).
       applyEqVisibility();
     });
-    registerIcueOption('eqBackground', false, value => {
+    registerSetting('eqBackground', value => {
       optEqBackground = value === true || value === 'true';
       applyEqVisibility();
     });
-    registerIcueOption('theme', 0, value => {
+    registerSetting('theme', value => {
       const n = Number(value);
       optTheme = Number.isFinite(n) ? Math.max(0, Math.min(5, Math.round(n))) : 0;
       applyTheme();
     });
-    registerIcueOption('eqShowAlbumArt', false, value => {
+    registerSetting('eqShowAlbumArt', value => {
       optEqShowAlbumArt = value === true || value === 'true';
       applyEqVisibility();
     });
+
+    // Kick the initial settings load — fires every handler with the
+    // host-backed value (if different from the default). Not awaited:
+    // the polling / rendering below operates on the defaults until the
+    // first GET response lands, then re-fires.
+    void loadSettings();
 
     pollOnce();
     startPollTimer();
