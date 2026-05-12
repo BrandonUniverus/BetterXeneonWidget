@@ -62,9 +62,26 @@ async function loadSystemAccent(): Promise<void> {
   try {
     const accent = await host.getAccentColor();
     appStore.update(s => ({ ...s, systemAccentColor: accent.hex }));
-    applyTheme();
   } catch {
     /* fall back to FALLBACK_ACCENT until host is reachable */
+  }
+}
+
+let widgetSettingsInFlight = false;
+async function refreshWidgetSettings(): Promise<void> {
+  if (widgetSettingsInFlight) return;
+  widgetSettingsInFlight = true;
+  try {
+    const widgetSettings = await host.getWidgetSettings();
+    appStore.update(s =>
+      s.widgetSettings?.currentThemeAccent === widgetSettings.currentThemeAccent
+        ? s
+        : { ...s, widgetSettings }
+    );
+  } catch {
+    /* host offline — the normal connection banner is driven by polling */
+  } finally {
+    widgetSettingsInFlight = false;
   }
 }
 
@@ -85,10 +102,27 @@ void loadConfig();
 startPolling();
 const app = mount(App, { target });
 void loadSystemAccent();
+void refreshWidgetSettings();
+
+let lastThemeKey = '';
+appStore.subscribe(s => {
+  const rawAccent = s.widgetSettings?.currentThemeAccent;
+  const themeAccent = typeof rawAccent === 'string' && HEX_RE.test(rawAccent) ? rawAccent : '';
+  const key = `${s.systemAccentColor ?? ''}|${themeAccent}`;
+  if (key === lastThemeKey) return;
+  lastThemeKey = key;
+  applyTheme();
+});
 
 registerIcueLifecycle({
-  onReady: applyTheme,
-  onPropertyChanged: applyTheme,
+  onReady: () => {
+    applyTheme();
+    void refreshWidgetSettings();
+  },
+  onPropertyChanged: () => {
+    applyTheme();
+    void refreshWidgetSettings();
+  },
 });
 
 // iCUE doesn't reliably fire onDataUpdated for every property change in
@@ -96,5 +130,6 @@ registerIcueLifecycle({
 // color / transparency / accent changes are picked up. applyTheme is
 // just a handful of CSS variable writes — negligible cost.
 setInterval(applyTheme, 1500);
+setInterval(() => { void refreshWidgetSettings(); }, 500);
 
 export default app;
