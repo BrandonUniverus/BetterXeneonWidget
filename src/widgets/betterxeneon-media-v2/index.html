@@ -518,16 +518,16 @@
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
 
-    /* List-view header — only used in playlists mode for now, holds the
-       back affordance + a title so the user clearly understands they've
-       left the now-playing context. */
+    /* List-view header — title for the playlists / audio-source /
+       settings sub-views. No border-bottom on purpose: the themed
+       horizon line above is already the visual divider, and stacking
+       a second 1px line just below it reads as "two horizons". */
     .list-header {
       display: flex;
       align-items: center;
       gap: 10px;
       padding: 2px 4px 8px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      margin-bottom: 6px;
+      margin-bottom: 4px;
     }
     .list-back {
       display: flex;
@@ -697,20 +697,16 @@
       font-size: clamp(15px, 2.8vmin, 22px);
       line-height: 1.5;
     }
-    /* EQ-as-background mode: clamp to 3 lines, anchored near the bottom
-       just above the progress bar.
-         - .lyrics absorbs all the free space above it (margin-top: auto)
-         - .progress's normal margin-top: auto is overridden to 4px, so
-           it no longer competes for slack; lyrics drops to just above.
-         - .content's flex gap of 6px stacks with that 4px → ~10px
-           between the bottom lyric line and the progress bar. */
+    /* EQ-as-background mode: clamp to 3 lines and let them flow
+       naturally right under the horizon line. No auto-margin on
+       .lyrics, so it sits in the flex column immediately below the
+       horizon (with .content's normal 6px gap). .progress keeps its
+       baseline margin-top: auto (from the non-eq-bg rule), so it
+       still pins to the bottom — the slack ends up between the
+       lyrics and the progress instead of above the lyrics. */
     .root.eq-as-bg .lyrics {
       flex: 0 0 auto;
       height: calc(3 * 1.5em + 3 * 8px);
-      margin-top: auto;
-    }
-    .root.eq-as-bg .progress {
-      margin-top: 4px;
     }
     /* Top/bottom fade overlays were using a hardcoded #0a0a0c page-bg
        color, which doubled as a darker rectangle on top of the album-art
@@ -2229,17 +2225,10 @@
     function renderQueueList() {
       const frag = document.createDocumentFragment();
 
-      // Header. Matches the playlists list visually — small title that
-      // anchors what the user is looking at without competing for height.
-      const header = document.createElement('div');
-      header.className = 'list-header';
-      const title = document.createElement('div');
-      title.className = 'lh-title';
-      title.textContent = spotifyQueue.length > 0
-        ? 'Up next · ' + spotifyQueue.length
-        : 'Up next';
-      header.appendChild(title);
-      frag.appendChild(header);
+      // No list-header here on purpose: the top-right "Up next" chip
+      // in the .header-row already communicates the queue context, so
+      // a second "Up next" label inside the list reads as duplication.
+      // (See user feedback after b7c3e1e.)
 
       if (spotifyQueue.length === 0) {
         const empty = document.createElement('div');
