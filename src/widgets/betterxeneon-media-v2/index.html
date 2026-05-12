@@ -578,15 +578,11 @@
        to hidden too — atmosphere mode replaces the cover entirely — but
        the eqShowAlbumArt option flips that off and brings the cover back
        so it sits alongside the bars.
-       When the cover IS shown, drop its opacity so the bars behind it
-       remain visible — without this, the cover sits on top of the
-       canvas and hides the slice of spectrum directly behind it. The
-       cover stays plenty recognizable at 0.7. */
+       The cover stays at full opacity; drawEqBars carves a vertical
+       notch in the spectrum so bars don't draw behind the cover (see
+       artLeft/artRight handling in drawEqBars). */
     .root.eq-as-bg .art-bg { display: none; }
     .root.eq-as-bg:not(.eq-show-art) .art { display: none; }
-    .root.eq-as-bg.eq-show-art .art {
-      opacity: 0.7;
-    }
 
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
@@ -1508,33 +1504,59 @@
       return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
     }
 
-    // Sample the album-art img into a 32×32 offscreen canvas, average the
-    // pixels that look "vibrant" (not near-black, not near-white, not
-    // near-gray). Skipping desaturated pixels avoids muddy results when
-    // covers have a black background — only the actual color content
-    // contributes. Returns null if no usable color is found.
+    // Sample the album-art img into a 64×64 offscreen canvas, then
+    // bucket pixels into a 6×6×6 RGB cube and pick the dominant cube
+    // (weighted by saturation so a single bright accent beats a wash
+    // of muted pixels). This handles mostly-dark covers far better
+    // than the old "average all vibrant pixels" approach — averaging
+    // collapses three vibrant hues into mud, while histogram picks
+    // whichever hue actually dominates.
+    const _eqExtractSize = 64;
     const _eqExtractCanvas = document.createElement('canvas');
-    _eqExtractCanvas.width = 32;
-    _eqExtractCanvas.height = 32;
+    _eqExtractCanvas.width = _eqExtractSize;
+    _eqExtractCanvas.height = _eqExtractSize;
     const _eqExtractCtx = _eqExtractCanvas.getContext('2d', { willReadFrequently: true });
     function extractDominantColor(img) {
       if (!img || !img.naturalWidth) return null;
       try {
-        _eqExtractCtx.clearRect(0, 0, 32, 32);
-        _eqExtractCtx.drawImage(img, 0, 0, 32, 32);
-        const data = _eqExtractCtx.getImageData(0, 0, 32, 32).data;
-        let rs = 0, gs = 0, bs = 0, n = 0;
+        const sz = _eqExtractSize;
+        _eqExtractCtx.clearRect(0, 0, sz, sz);
+        _eqExtractCtx.drawImage(img, 0, 0, sz, sz);
+        const data = _eqExtractCtx.getImageData(0, 0, sz, sz).data;
+        // 6³ = 216 possible buckets. Encoded as a single int key so the
+        // Map stays cheap (no string concat per pixel).
+        const buckets = new Map();
         for (let i = 0; i < data.length; i += 4) {
           const pr = data[i], pg = data[i+1], pb = data[i+2];
           const lum = (pr + pg + pb) / 3;
-          if (lum < 25 || lum > 230) continue;          // skip near-black / near-white
+          if (lum < 20 || lum > 235) continue;          // skip near-black / near-white
           const maxC = Math.max(pr, pg, pb);
           const minC = Math.min(pr, pg, pb);
-          if (maxC - minC < 25) continue;                // skip near-gray
-          rs += pr; gs += pg; bs += pb; n++;
+          if (maxC - minC < 20) continue;                // skip near-gray
+          const k = ((pr >> 5) << 10) | ((pg >> 5) << 5) | (pb >> 5);
+          let b = buckets.get(k);
+          if (!b) { b = { count: 0, r: 0, g: 0, b: 0 }; buckets.set(k, b); }
+          b.count++; b.r += pr; b.g += pg; b.b += pb;
         }
-        if (n === 0) return null;
-        return [Math.round(rs / n), Math.round(gs / n), Math.round(bs / n)];
+        if (buckets.size === 0) return null;
+        // Score = count × (1 + 1.5×saturation). The bonus rewards
+        // distinctive colors over abundant-but-muted ones, which is
+        // closer to what Spotify et al. do — they pick the "look at
+        // me" color, not the mathematical center of mass.
+        let best = null, bestScore = -1;
+        for (const b of buckets.values()) {
+          const avgR = b.r / b.count;
+          const avgG = b.g / b.count;
+          const avgB = b.b / b.count;
+          const maxC = Math.max(avgR, avgG, avgB);
+          const minC = Math.min(avgR, avgG, avgB);
+          const sat = maxC === 0 ? 0 : (maxC - minC) / maxC;
+          const score = b.count * (1 + sat * 1.5);
+          if (score > bestScore) { bestScore = score; best = b; }
+        }
+        return [Math.round(best.r / best.count),
+                Math.round(best.g / best.count),
+                Math.round(best.b / best.count)];
       } catch {
         // Tainted canvas (cross-origin without CORS) or any other failure.
         // The img tag has crossorigin="anonymous" and the host's CORS is
@@ -1738,8 +1760,55 @@
       const reflectFactor = 1.0;
 
       const pad = w * 0.04;
-      const innerW = w - pad * 2;
-      const slot = innerW / EQ_BINS;
+
+      // Default drawing region: full canvas width minus padding.
+      let startX = pad;
+      let availableW = w - pad * 2;
+      let drawBaseY = baseY;     // may shift down if art is at top
+      let drawMaxH = maxH;       // may shrink to fit reflection
+
+      // If the album cover is visible alongside the bars, push the
+      // drawing region out of the cover's area. The user wants the
+      // spectrum to MOVE OVER, not be carved out — losing the high-end
+      // bins is acceptable (their words: "we can just lose a few
+      // frequencies"). Approach:
+      //   size-wide   — art sits on the left; push startX right of art
+      //                 and shrink the visible bar count so each bar
+      //                 keeps its original width (no scrunching).
+      //   size-vertical — art sits at top-center; push the baseline
+      //                 down so bars don't overlap the cover. Bar count
+      //                 stays at EQ_BINS, but the bars and their
+      //                 reflection get vertically scaled to fit.
+      let numBars = EQ_BINS;
+      if (rootEl.classList.contains('eq-as-bg')
+          && rootEl.classList.contains('eq-show-art')) {
+        const ar = artEl.getBoundingClientRect();
+        const cr = eqCanvas.getBoundingClientRect();
+        if (ar.width > 0 && ar.height > 0) {
+          const edge = 10;
+          if (rootEl.classList.contains('size-wide')) {
+            const artRightLocal = (ar.right - cr.left) + edge;
+            const stdSlot = (w - pad * 2) / EQ_BINS;
+            startX = Math.max(pad, artRightLocal);
+            availableW = Math.max(stdSlot * 4, w - pad - startX);
+            numBars = Math.max(8, Math.floor(availableW / stdSlot));
+          } else {
+            const artBottomLocal = (ar.bottom - cr.top) + edge;
+            // Pick the smallest maxH where bars clear the cover AND
+            // the reflection fits within the canvas:
+            //   drawBaseY - drawMaxH > artBottomLocal
+            //   drawBaseY + drawMaxH < h
+            // Setting drawMaxH = min((h - artBottomLocal)/2 - small,
+            // original maxH) works.
+            const cap = Math.max(40, (h - artBottomLocal - 12) / 2);
+            drawMaxH = Math.min(maxH, cap);
+            drawBaseY = artBottomLocal + drawMaxH;
+            if (drawBaseY < h * 0.5) drawBaseY = h * 0.5;
+          }
+        }
+      }
+
+      const slot = availableW / numBars;
       const barW = slot * 0.72;
 
       // Decide the per-bar color source. Album-derived (palette 0) reuses
@@ -1753,11 +1822,15 @@
 
       const rgba = (c, a) => `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
 
-      for (let i = 0; i < EQ_BINS; i++) {
-        const v = eqSpectrum[i];
-        const bh = Math.min(maxH, v * maxH);
-        eqPeaks[i] = Math.max(eqPeaks[i] - 0.6, bh);
-        const x = pad + i * slot + (slot - barW) / 2;
+      for (let i = 0; i < numBars; i++) {
+        // Visible bar i → which spectrum bin does it show? When numBars
+        // < EQ_BINS we subsample evenly so the full frequency range is
+        // still represented, just at lower resolution.
+        const binIdx = numBars === EQ_BINS ? i : Math.floor(i * EQ_BINS / numBars);
+        const v = eqSpectrum[binIdx];
+        const bh = Math.min(drawMaxH, v * drawMaxH);
+        eqPeaks[binIdx] = Math.max(eqPeaks[binIdx] - 0.6, bh);
+        const x = startX + i * slot + (slot - barW) / 2;
 
         // Resolve top + bottom colors for THIS bar.
         let ct, cb;
@@ -1772,12 +1845,12 @@
         }
 
         // Main bar: bright top → darker bottom (two-tone).
-        const grad = eqCtx.createLinearGradient(0, baseY - bh, 0, baseY);
+        const grad = eqCtx.createLinearGradient(0, drawBaseY - bh, 0, drawBaseY);
         grad.addColorStop(0, rgba(ct, 1));
         grad.addColorStop(0.6, rgba(ct, 0.92));
         grad.addColorStop(1, rgba(cb, 0.55));
         eqCtx.fillStyle = grad;
-        eqCtx.fillRect(x, baseY - bh, barW, bh);
+        eqCtx.fillRect(x, drawBaseY - bh, barW, bh);
 
         // Reflection below baseline.
         // - First 50% of reflection: hold near-full mirror opacity
@@ -1785,17 +1858,17 @@
         // User request: "halfway it starts fading out slowly".
         const reflH = bh * reflectFactor;
         if (reflH > 1) {
-          const g2 = eqCtx.createLinearGradient(0, baseY, 0, baseY + reflH);
+          const g2 = eqCtx.createLinearGradient(0, drawBaseY, 0, drawBaseY + reflH);
           g2.addColorStop(0, rgba(cb, 0.55));
           g2.addColorStop(0.5, rgba(cb, 0.5));   // halfway — still vivid
           g2.addColorStop(1, rgba(cb, 0));        // bottom — fully faded
           eqCtx.fillStyle = g2;
-          eqCtx.fillRect(x, baseY, barW, reflH);
+          eqCtx.fillRect(x, drawBaseY, barW, reflH);
         }
 
         // Peak cap — thin line that decays toward the bar top.
         eqCtx.fillStyle = rgba(ct, 0.95);
-        eqCtx.fillRect(x, baseY - eqPeaks[i] - 3, barW, 2);
+        eqCtx.fillRect(x, drawBaseY - eqPeaks[binIdx] - 3, barW, 2);
       }
     }
 
