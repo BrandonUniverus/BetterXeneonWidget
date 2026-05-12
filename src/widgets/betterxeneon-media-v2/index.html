@@ -936,10 +936,19 @@
 
     // View state for the content area: 'lyrics' (default — lyrics if
     // available, queue auto-fallback otherwise), 'queue' (user explicitly
-    // tapped the queue button), or 'playlists' (user tapped the lib btn
-    // while authed). Auto-resets to 'lyrics' on track change so the user
-    // doesn't get stuck on a stale list.
+    // tapped the queue button), 'playlists' (user tapped the lib btn
+    // while authed), or 'audio-source' (sub-view from playlists for
+    // picking the WASAPI capture device — handles software-mixer
+    // setups like SteelSeries Sonar). Auto-resets to 'lyrics' on
+    // track change so the user doesn't get stuck on a stale list.
     let currentView = 'lyrics';
+
+    // Audio source picker state. Populated on first entry to the picker
+    // view (or when the EQ first becomes visible). Devices don't change
+    // often — no continuous poll.
+    let audioSources = [];
+    let audioSourceActiveId = null;
+    let audioSourceActiveName = '';
 
     // Listening (screensaver) mode state. Auto-expands when the user
     // hasn't interacted for autoExpandAfterSec, exits on any touch /
@@ -1144,7 +1153,7 @@
     function setLibMode() {
       let mode;
       if (!spotifyAuthed) mode = 'connect';
-      else if (currentView === 'playlists') mode = 'back';
+      else if (currentView === 'playlists' || currentView === 'audio-source') mode = 'back';
       else mode = 'playlists';
       if (mode === lastLibMode) return;
       lastLibMode = mode;
@@ -1198,10 +1207,12 @@
         // to the Spotify auth URL via the betterxeneonwidget:// scheme.
         try { await fetch(HOST + '/api/spotify/connect', { method: 'POST' }); }
         catch { /* surfaced by next poll's status */ }
+      } else if (currentView === 'audio-source') {
+        // Inside the audio-source sub-view → tap back goes to playlists
+        // (where we came from), not all the way out to lyrics.
+        setView('playlists');
       } else {
-        // Authed: toggle playlists view in the same content slot the
-        // lyrics/queue use (no modal — keeps the user in-context with
-        // the rest of the widget). Tapping again returns to lyrics.
+        // Authed and on lyrics/queue/playlists: toggle playlists view.
         setView(currentView === 'playlists' ? 'lyrics' : 'playlists');
       }
     });
@@ -1286,6 +1297,45 @@
       catch { /* surfaced by next poll's status */ }
     }
 
+    // --- Audio source picker --------------------------------------------
+    // Fetches the host's list of render endpoints and the current
+    // capture source. Used when the user opens the audio-source view
+    // (or any time we need to refresh after a device change). The host
+    // owns the actual device-capture lifecycle — we just display
+    // options and forward the user's pick.
+    async function loadAudioSources() {
+      try {
+        const [dr, sr] = await Promise.all([
+          fetch(HOST + '/api/audio/spectrum/devices'),
+          fetch(HOST + '/api/audio/spectrum/source'),
+        ]);
+        if (dr.ok) audioSources = await dr.json();
+        if (sr.ok) {
+          const s = await sr.json();
+          audioSourceActiveId = s.activeId || '';
+          audioSourceActiveName = s.activeName || '';
+        }
+        if (currentView === 'audio-source') applyView();
+      } catch { /* non-fatal */ }
+    }
+
+    async function setAudioSource(deviceId) {
+      try {
+        const r = await fetch(HOST + '/api/audio/spectrum/source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deviceId }),
+        });
+        if (r.ok) {
+          const s = await r.json();
+          audioSourceActiveId = s.activeId || '';
+          audioSourceActiveName = s.activeName || '';
+        }
+      } catch { /* surfaced by next refresh */ }
+      // After picking, go back to playlists (where the user came from).
+      setView('playlists');
+    }
+
     async function disconnectSpotify() {
       // Tell the host to drop the stored token. The widget's next poll
       // will see connected:false within ~1.5s and the auth-flip handler
@@ -1308,6 +1358,7 @@
       // Prime the relevant data so the list isn't blank on first open.
       if (view === 'playlists') pollSpotifyPlaylists();
       if (view === 'queue') pollSpotifyQueue();
+      if (view === 'audio-source') loadAudioSources();
       applyView();
     }
 
@@ -1820,22 +1871,24 @@
       // Playlists view hides the bottom bar (progress + transport +
       // status) — the user is in "browse mode" and the now-playing chrome
       // is just visual noise. They get back via the back button in the
-      // list header.
-      rootEl.classList.toggle('playlists-mode', currentView === 'playlists');
+      // list header. Audio-source view rides the same class — it's a
+      // sub-view of playlists and shares the visual treatment.
+      rootEl.classList.toggle('playlists-mode',
+        currentView === 'playlists' || currentView === 'audio-source');
 
       // Queue button is redundant when the queue is the visible content
       // (tapping it would toggle to lyrics, but if there are no lyrics
       // we'd be sent right back here — confusing). Hide it in that case.
-      // Stays visible when on lyrics (so the user can switch to queue) or
-      // on playlists (so the user can jump to queue without going through
-      // the lyrics step).
-      const queueIsCenter = showList && currentView !== 'playlists';
+      // Stays visible when on lyrics, playlists, or audio-source so the
+      // user can always jump to queue.
+      const queueIsCenter = showList && currentView !== 'playlists' && currentView !== 'audio-source';
       queueBtn.classList.toggle('hidden', queueIsCenter);
       // Active class mirrors the user's explicit choice, not the
       // effective view — a lyrics-less track's auto-fallback shouldn't
       // light the toggle up.
       queueBtn.classList.toggle('active', currentView === 'queue');
-      libBtn.classList.toggle('active', currentView === 'playlists');
+      libBtn.classList.toggle('active',
+        currentView === 'playlists' || currentView === 'audio-source');
       // Lib button icon depends on currentView (back arrow in playlists
       // view) — re-resolve every time the view changes.
       setLibMode();
@@ -1843,6 +1896,8 @@
       if (!showList) return;
       if (currentView === 'playlists') {
         renderPlaylistsList();
+      } else if (currentView === 'audio-source') {
+        renderAudioSourceList();
       } else {
         renderQueueList();
       }
@@ -1969,6 +2024,38 @@
           frag.appendChild(row);
         }
       }
+      // Audio source picker entry — always available in the playlists
+      // view (auth-independent — the visualizer needs to work whether or
+      // not Spotify is connected, and the audio capture device is the
+      // user's choice regardless). Tap opens the audio-source sub-view.
+      const sourceRow = document.createElement('button');
+      sourceRow.className = 'list-row';
+      sourceRow.type = 'button';
+      sourceRow.style.marginTop = '8px';
+      sourceRow.style.borderTop = '1px solid rgba(255,255,255,0.08)';
+      sourceRow.style.paddingTop = '12px';
+      const srcIcon = document.createElement('div');
+      srcIcon.className = 'lr-art';
+      srcIcon.style.display = 'flex';
+      srcIcon.style.alignItems = 'center';
+      srcIcon.style.justifyContent = 'center';
+      srcIcon.style.fontSize = '20px';
+      srcIcon.textContent = '🔊';
+      const srcMeta = document.createElement('div');
+      srcMeta.className = 'lr-meta';
+      const srcName = document.createElement('div');
+      srcName.className = 'lr-name';
+      srcName.textContent = 'Equalizer audio source';
+      const srcSub = document.createElement('div');
+      srcSub.className = 'lr-sub';
+      srcSub.textContent = audioSourceActiveName || 'System default';
+      srcMeta.appendChild(srcName);
+      srcMeta.appendChild(srcSub);
+      sourceRow.appendChild(srcIcon);
+      sourceRow.appendChild(srcMeta);
+      sourceRow.addEventListener('click', () => setView('audio-source'));
+      frag.appendChild(sourceRow);
+
       // Disconnect lives at the bottom of the playlists list — only
       // surfaced when the user is intentionally in the auth-affected
       // view, so it's discoverable without being in the way of the
@@ -1997,6 +2084,100 @@
         disconnect.addEventListener('click', disconnectSpotify);
         frag.appendChild(disconnect);
       }
+      listViewEl.textContent = '';
+      listViewEl.appendChild(frag);
+    }
+
+    // Renders the audio-source sub-view: list of all active render
+    // endpoints, with the configured one highlighted. Tap a row to
+    // switch — the host immediately re-points its WASAPI loopback at
+    // the new device and persists the choice to %APPDATA% so it
+    // survives restarts. Designed for software-mixer setups
+    // (SteelSeries Sonar, Voicemeeter) where the Windows-default
+    // device isn't the one carrying music.
+    function renderAudioSourceList() {
+      const frag = document.createDocumentFragment();
+
+      const header = document.createElement('div');
+      header.className = 'list-header';
+      const title = document.createElement('div');
+      title.className = 'lh-title';
+      title.textContent = 'Equalizer audio source';
+      header.appendChild(title);
+      frag.appendChild(header);
+
+      // Always offer "system default" first — a reset path if a saved
+      // device is wrong / unavailable. Posting deviceId: null tells the
+      // host to clear the override.
+      const defaultRow = document.createElement('button');
+      defaultRow.className = 'list-row';
+      defaultRow.type = 'button';
+      const defIcon = document.createElement('div');
+      defIcon.className = 'lr-art';
+      defIcon.style.display = 'flex';
+      defIcon.style.alignItems = 'center';
+      defIcon.style.justifyContent = 'center';
+      defIcon.style.fontSize = '18px';
+      defIcon.textContent = '★';
+      const defMeta = document.createElement('div');
+      defMeta.className = 'lr-meta';
+      const defName = document.createElement('div');
+      defName.className = 'lr-name';
+      defName.textContent = 'System default';
+      const defSub = document.createElement('div');
+      defSub.className = 'lr-sub';
+      defSub.textContent = 'Follows the Windows playback default';
+      defMeta.appendChild(defName);
+      defMeta.appendChild(defSub);
+      defaultRow.appendChild(defIcon);
+      defaultRow.appendChild(defMeta);
+      defaultRow.addEventListener('click', () => setAudioSource(null));
+      frag.appendChild(defaultRow);
+
+      if (audioSources.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'list-empty';
+        empty.textContent = 'No render devices found.';
+        frag.appendChild(empty);
+      } else {
+        for (const d of audioSources) {
+          const row = document.createElement('button');
+          row.className = 'list-row';
+          row.type = 'button';
+          const icon = document.createElement('div');
+          icon.className = 'lr-art';
+          icon.style.display = 'flex';
+          icon.style.alignItems = 'center';
+          icon.style.justifyContent = 'center';
+          icon.style.fontSize = '18px';
+          // Currently capturing from this device → checkmark, else
+          // empty circle. The checkmark uses the theme accent color so
+          // it's visible against any theme.
+          if (d.id === audioSourceActiveId) {
+            icon.textContent = '✓';
+            icon.style.color = 'var(--theme-accent)';
+            icon.style.fontWeight = '700';
+          } else {
+            icon.textContent = '○';
+            icon.style.opacity = '0.4';
+          }
+          const meta = document.createElement('div');
+          meta.className = 'lr-meta';
+          const name = document.createElement('div');
+          name.className = 'lr-name';
+          name.textContent = d.name;
+          const sub = document.createElement('div');
+          sub.className = 'lr-sub';
+          sub.textContent = d.isDefault ? 'Windows default' : 'Render endpoint';
+          meta.appendChild(name);
+          meta.appendChild(sub);
+          row.appendChild(icon);
+          row.appendChild(meta);
+          row.addEventListener('click', () => setAudioSource(d.id));
+          frag.appendChild(row);
+        }
+      }
+
       listViewEl.textContent = '';
       listViewEl.appendChild(frag);
     }

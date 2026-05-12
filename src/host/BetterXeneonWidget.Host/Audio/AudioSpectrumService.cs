@@ -1,3 +1,5 @@
+using BetterXeneonWidget.Host.Config;
+using NAudio.CoreAudioApi;
 using NAudio.Dsp;
 using NAudio.Wave;
 
@@ -31,11 +33,16 @@ public sealed class AudioSpectrumService : IDisposable
     private const float FREQ_HIGH = 16000f;   // highest bin upper edge (Hz)
 
     private readonly ILogger<AudioSpectrumService> _log;
+    private readonly ConfigService _config;
+    private readonly MMDeviceEnumerator _enumerator;
     private WasapiLoopbackCapture? _capture;
+    private string? _activeDeviceId;
+    private string _activeDeviceName = "";
     private readonly float[] _sampleBuffer = new float[FFT_SIZE];
     private int _sampleBufferPos;
     private readonly Complex[] _fftBuffer = new Complex[FFT_SIZE];
     private readonly float[] _hann = new float[FFT_SIZE];
+    private readonly object _captureLock = new();
 
     private readonly Lock _stateLock = new();
     private readonly float[] _raw = new float[NUM_BINS];
@@ -48,28 +55,86 @@ public sealed class AudioSpectrumService : IDisposable
     private DateTimeOffset _lastUpdate = DateTimeOffset.MinValue;
     private bool _captureFailed;
 
-    public AudioSpectrumService(ILogger<AudioSpectrumService> log)
+    public AudioSpectrumService(
+        ILogger<AudioSpectrumService> log,
+        ConfigService config,
+        MMDeviceEnumerator enumerator)
     {
         _log = log;
+        _config = config;
+        _enumerator = enumerator;
         // Precompute Hann window — reduces spectral leakage at the FFT
         // boundaries so the bins are crisp instead of smeared.
         for (int i = 0; i < FFT_SIZE; i++)
         {
             _hann[i] = 0.5f * (1f - (float)Math.Cos(2 * Math.PI * i / (FFT_SIZE - 1)));
         }
-        TryStartCapture();
+        // Start with whatever device the user configured last time. Null /
+        // missing = default render device. We don't error if the saved
+        // device is gone — fall back to default silently.
+        TryStartCapture(_config.ReadAudioCaptureDeviceId());
     }
 
-    private void TryStartCapture()
+    /// <summary>
+    /// Resolves a device by ID (or default if null/unknown) and (re)starts
+    /// the capture pipeline against it. Safe to call repeatedly; tears
+    /// down the previous capture first.
+    /// </summary>
+    public void SetCaptureDevice(string? deviceId, bool persist)
+    {
+        lock (_captureLock)
+        {
+            StopAndDisposeCapture();
+            TryStartCapture(deviceId);
+        }
+        if (persist) _config.WriteAudioCaptureDeviceId(deviceId);
+    }
+
+    private MMDevice? ResolveDevice(string? deviceId)
+    {
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            try
+            {
+                var d = _enumerator.GetDevice(deviceId);
+                if (d != null && d.State == DeviceState.Active && d.DataFlow == DataFlow.Render)
+                    return d;
+                _log.LogWarning("Audio spectrum: configured device {Id} is not an active render endpoint; falling back to default.", deviceId);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Audio spectrum: configured device {Id} not found; falling back to default.", deviceId);
+            }
+        }
+        try { return _enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia); }
+        catch { return null; }
+    }
+
+    private void TryStartCapture(string? requestedDeviceId)
     {
         try
         {
-            _capture = new WasapiLoopbackCapture();
+            var device = ResolveDevice(requestedDeviceId);
+            if (device == null)
+            {
+                _captureFailed = true;
+                _log.LogWarning("Audio spectrum: no active render device found.");
+                return;
+            }
+            // Construct the capture. When the resolved device is the
+            // current default, WasapiLoopbackCapture() (no args) is
+            // equivalent — but always passing the device keeps the
+            // start/stop/restart code path uniform.
+            _capture = new WasapiLoopbackCapture(device);
             _capture.DataAvailable += OnDataAvailable;
             _capture.RecordingStopped += OnRecordingStopped;
             _capture.StartRecording();
+            _activeDeviceId = device.ID;
+            _activeDeviceName = device.FriendlyName;
+            _captureFailed = false;
             _log.LogInformation(
-                "Audio spectrum: loopback capture started ({Channels}ch, {Bits}-bit, {Rate}Hz)",
+                "Audio spectrum: loopback capture started on '{Name}' ({Channels}ch, {Bits}-bit, {Rate}Hz)",
+                _activeDeviceName,
                 _capture.WaveFormat.Channels,
                 _capture.WaveFormat.BitsPerSample,
                 _capture.WaveFormat.SampleRate);
@@ -81,19 +146,37 @@ public sealed class AudioSpectrumService : IDisposable
         }
     }
 
+    private void StopAndDisposeCapture()
+    {
+        var cap = _capture;
+        _capture = null;
+        if (cap == null) return;
+        try
+        {
+            cap.DataAvailable -= OnDataAvailable;
+            cap.RecordingStopped -= OnRecordingStopped;
+            cap.StopRecording();
+            cap.Dispose();
+        }
+        catch { /* shutting capture down — swallow */ }
+    }
+
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
     {
         // Common cause: default device changed (headphones unplugged, etc.).
-        // Try once to restart with the new default — fail silently after that.
+        // Try once to restart with the configured device (or default if
+        // none) — fail silently after that.
         if (e.Exception != null)
         {
             _log.LogWarning(e.Exception, "Audio spectrum: capture stopped on error. Attempting restart.");
         }
         try
         {
-            _capture?.Dispose();
-            _capture = null;
-            TryStartCapture();
+            lock (_captureLock)
+            {
+                StopAndDisposeCapture();
+                TryStartCapture(_config.ReadAudioCaptureDeviceId());
+            }
         }
         catch (Exception ex)
         {
@@ -288,23 +371,54 @@ public sealed class AudioSpectrumService : IDisposable
                 Mid: _mid,
                 Treble: _treble,
                 CaptureOk: !_captureFailed && _capture != null,
+                DeviceId: _activeDeviceId ?? "",
+                DeviceName: _activeDeviceName,
                 UpdatedAtUtcMs: _lastUpdate.ToUnixTimeMilliseconds());
         }
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Enumerate every active render endpoint. The widget surfaces this
+    /// list so users with software mixers (SteelSeries Sonar, Voicemeeter,
+    /// Equalizer APO, etc.) can point the visualizer at the virtual
+    /// device carrying their music — without having to change their
+    /// Windows default playback device. Marks the system default + the
+    /// one we're currently capturing from so the UI can highlight them.
+    /// </summary>
+    public IReadOnlyList<AudioSourceDto> ListRenderDevices()
     {
+        var result = new List<AudioSourceDto>();
+        string? defaultId = null;
+        try { defaultId = _enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia).ID; }
+        catch { /* no default — empty list of devices possible */ }
+
         try
         {
-            if (_capture != null)
+            // NAudio's MMDeviceCollection isn't IDisposable; the underlying
+            // COM resources get released as MMDevice instances go out of
+            // scope. We snapshot the metadata into our DTO list and let
+            // GC handle the COM refs.
+            var devices = _enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+            for (int i = 0; i < devices.Count; i++)
             {
-                _capture.DataAvailable -= OnDataAvailable;
-                _capture.RecordingStopped -= OnRecordingStopped;
-                _capture.StopRecording();
-                _capture.Dispose();
+                var d = devices[i];
+                result.Add(new AudioSourceDto(
+                    Id: d.ID,
+                    Name: d.FriendlyName,
+                    IsDefault: d.ID == defaultId,
+                    IsActive: d.ID == _activeDeviceId));
             }
         }
-        catch { /* shutting down */ }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Audio spectrum: failed to enumerate render endpoints.");
+        }
+        return result;
+    }
+
+    public void Dispose()
+    {
+        try { StopAndDisposeCapture(); } catch { /* shutting down */ }
     }
 }
 
@@ -314,4 +428,12 @@ public sealed record AudioSpectrumDto(
     float Mid,
     float Treble,
     bool CaptureOk,
+    string DeviceId,
+    string DeviceName,
     long UpdatedAtUtcMs);
+
+public sealed record AudioSourceDto(
+    string Id,
+    string Name,
+    bool IsDefault,
+    bool IsActive);
