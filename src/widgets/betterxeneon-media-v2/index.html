@@ -47,9 +47,24 @@
         data-max="2000"
         data-step="50">
 
+  <!-- Listening view mode. The "ambient" full-screen state the widget
+       expands to after autoExpandAfterSec seconds of idle. Slider with
+       discrete stops because iCUE doesn't expose a dropdown control:
+         0 = Lyrics       — keep the metadata + lyrics, hide bottom bar
+         1 = Album cover  — center the album art, hide everything else
+         2 = Equalizer    — placeholder (in development, no audio capture yet) -->
+  <meta name="x-icue-property" content="listeningView"
+        data-label="tr('Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer dev)')"
+        data-type="slider"
+        data-default="0"
+        data-min="0"
+        data-max="2"
+        data-step="1">
+
   <script id="x-icue-groups" type="application/json">
     [
-      { "title": "tr('Behavior')", "properties": ["pollIntervalMs", "autoExpand", "autoExpandAfterSec", "showLyrics", "lyricSyncOffsetMs"] }
+      { "title": "tr('Behavior')", "properties": ["pollIntervalMs", "showLyrics", "lyricSyncOffsetMs"] },
+      { "title": "tr('Listening View')", "properties": ["autoExpand", "autoExpandAfterSec", "listeningView"] }
     ]
   </script>
 
@@ -390,6 +405,68 @@
     .root.playlists-mode .transport,
     .root.playlists-mode .phase { display: none; }
 
+    /* -- Listening (screensaver) mode --------------------------------------
+       Three sub-modes, gated by the iCUE Listening view dropdown. All three
+       hide the bottom bar (progress/transport/status) and the up-next chip
+       + queue button on the right of the header — this is "ambient",
+       attention-respecting state. Tap anywhere to exit. */
+    .root.listening-mode .progress,
+    .root.listening-mode .transport,
+    .root.listening-mode .phase,
+    .root.listening-mode .header-right { display: none; }
+
+    /* Lyrics submode (default): everything still visible except the bottom
+       bar. Lyric track gets the rest of the room. No specific overrides
+       needed — the .listening-mode rule above is enough. */
+
+    /* Album submode: hide all content, balloon the art to fill. Keep the
+       blurred bg layer — it makes the centered cover feel poster-like. */
+    .root.listening-album .content { display: none; }
+    .root.listening-album {
+      align-items: center;
+      justify-content: center;
+    }
+    .root.listening-album .art {
+      width: min(80vmin, 80vh, 80vw);
+      height: min(80vmin, 80vh, 80vw);
+      max-width: 90%;
+      max-height: 90%;
+    }
+    /* When there's no art, the placeholder shouldn't squeeze the layout. */
+    .root.listening-album .art.empty { visibility: visible; opacity: 0.2; }
+
+    /* Equalizer submode: placeholder for now (development). No audio capture
+       hook on this build, so render a glyph + "in development" line so the
+       option still produces a recognizable state. */
+    .root.listening-equalizer .art,
+    .root.listening-equalizer .art-bg,
+    .root.listening-equalizer .content { display: none; }
+    .root.listening-equalizer {
+      align-items: center;
+      justify-content: center;
+    }
+    .root.listening-equalizer::before {
+      content: '♪♫♪';
+      color: rgba(29, 185, 84, 0.6);
+      font-size: clamp(48px, 12vmin, 96px);
+      letter-spacing: 0.15em;
+      font-weight: 700;
+      text-align: center;
+      display: block;
+    }
+    .root.listening-equalizer::after {
+      content: 'Equalizer mode — in development';
+      position: absolute;
+      bottom: 14%;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255, 255, 255, 0.35);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
        avoids the scrollTo preemption flicker.) */
@@ -420,9 +497,9 @@
       padding: 4px 8px;
       opacity: 0.35;
       color: #fff;
+      text-align: center;       /* always centered — see UX note in commit history */
       transition: opacity 250ms, color 250ms;
     }
-    .root.size-vertical .lyrics .line { text-align: center; }
     .lyrics .line.past { opacity: 0.4; }
     .lyrics .line.current {
       opacity: 1;
@@ -714,6 +791,16 @@
     // while authed). Auto-resets to 'lyrics' on track change so the user
     // doesn't get stuck on a stale list.
     let currentView = 'lyrics';
+
+    // Listening (screensaver) mode state. Auto-expands when the user
+    // hasn't interacted for autoExpandAfterSec, exits on any touch /
+    // pointer / key event. listeningView selects the submode:
+    //   0 = Lyrics      (keep lyrics + metadata, hide bottom bar)
+    //   1 = Album       (center the cover, hide everything else)
+    //   2 = Equalizer   (placeholder, in development)
+    let listeningMode = false;
+    let lastActivityAt = performance.now();
+    let optListeningView = 0;
     // Aspect-ratio threshold separating wide-strip from square/tall.
     // Edge cell aspect ratios from the kit:
     //   Small horizontal:  840×344 = 2.44 → wide
@@ -1043,6 +1130,61 @@
       if (view === 'queue') pollSpotifyQueue();
       applyView();
     }
+
+    // --- Listening (screensaver) mode -----------------------------------
+
+    function applyListeningMode() {
+      // Three classes drive the CSS. Always toggle all three so a mid-
+      // session option change re-syncs cleanly without a half-applied
+      // intermediate state.
+      rootEl.classList.toggle('listening-mode', listeningMode);
+      rootEl.classList.toggle('listening-lyrics',
+        listeningMode && optListeningView === 0);
+      rootEl.classList.toggle('listening-album',
+        listeningMode && optListeningView === 1);
+      rootEl.classList.toggle('listening-equalizer',
+        listeningMode && optListeningView === 2);
+    }
+
+    function enterListeningMode() {
+      if (listeningMode) return;
+      listeningMode = true;
+      applyListeningMode();
+    }
+
+    function exitListeningMode() {
+      if (!listeningMode) return;
+      listeningMode = false;
+      applyListeningMode();
+    }
+
+    function bumpActivity() {
+      lastActivityAt = performance.now();
+      if (listeningMode) exitListeningMode();
+    }
+
+    // Any pointer / key / scroll interaction counts as "user is here" and
+    // resets the idle timer. passive:true so the listener never blocks the
+    // touch/scroll path. Bound at document level so it catches taps on
+    // buttons too — tapping a button intentionally exits listening mode
+    // and triggers the underlying action in the same gesture.
+    for (const ev of ['pointerdown', 'touchstart', 'wheel', 'keydown']) {
+      document.addEventListener(ev, bumpActivity, { passive: true });
+    }
+
+    // Idle-check tick. Fires every second so the resolution of the
+    // autoExpandAfterSec slider isn't ruined. Cheap — just two reads +
+    // a subtraction in steady state.
+    setInterval(() => {
+      if (!optAutoExpand) return;
+      if (listeningMode) return;
+      // Don't auto-expand if the user is mid-browse (playlists view). They
+      // were explicitly looking at something; an ambient takeover here
+      // feels rude.
+      if (currentView === 'playlists') return;
+      const idleSec = (performance.now() - lastActivityAt) / 1000;
+      if (idleSec >= optAutoExpandAfterSec) enterListeningMode();
+    }, 1000);
 
     function applyView() {
       const hasLyrics = parsedLyrics.length > 0 && optShowLyrics;
@@ -1406,14 +1548,13 @@
 
     async function pollOnce() {
       try {
-        // Bracket the SMTC fetch so we can measure round-trip and
-        // compensate the position anchor for one-way transit. Without
-        // this the lyric highlighter is consistently behind the audio
-        // by ~25-50ms because the host's "current position" was
-        // computed at the moment IT serialized the response, not at
-        // the moment we received it. Half-roundtrip is the best
-        // estimate of one-way latency without server-clock alignment.
-        const fetchStart = performance.now();
+        // No round-trip compensation. The earlier "halfRoundTrip" patch
+        // measured (fetchEnd - fetchStart) which includes host-side SMTC
+        // calls + two JSON serializations — most of that isn't transit.
+        // Adding half of it to the position pushed the highlight 30-60ms
+        // ahead of the audio, which feels noticeably worse than the tiny
+        // natural lag of doing nothing. v1's behavior was just: anchor
+        // serverPos at the moment we received it. Matching that here.
         const [npRes, ssRes] = await Promise.all([
           fetch(HOST + '/api/media/now-playing'),
           fetch(HOST + '/api/spotify/status'),
@@ -1423,7 +1564,6 @@
         const np = await npRes.json();
         const ss = await ssRes.json();
         const fetchEnd = performance.now();
-        const halfRoundTrip = (fetchEnd - fetchStart) / 2;
 
         const wasAuthed = spotifyAuthed;
         spotifyAuthed = !!ss.connected;
@@ -1469,15 +1609,13 @@
         lastCanPrev = setBtnEnabled(prevBtn, !!np.canGoPrevious, lastCanPrev);
         lastCanNext = setBtnEnabled(nextBtn, !!np.canGoNext, lastCanNext);
 
-        // Position anchor. np.positionMs was the host's best estimate
-        // of "current position" at the moment IT serialized the
-        // response. We received that response halfRoundTrip ms later,
-        // so the position has actually advanced by that much (assuming
-        // playing). Bake the latency compensation into anchorPosMs so
-        // the local extrapolation uses an anchor that's aligned with
-        // performance.now() = fetchEnd.
-        const rawServerPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
-        const serverPos = isPlaying ? rawServerPos + halfRoundTrip : rawServerPos;
+        // Position anchor. Use serverPos as-is and anchor it at fetchEnd
+        // (the moment we received the response). The small natural transit
+        // lag puts the highlighter a hair behind the audio, which is what
+        // most users perceive as "in sync" — the green line matches what
+        // they're hearing, not what's about to be sung. The iCUE Behavior
+        // > Lyric sync offset slider is the user-tunable knob for the rest.
+        const serverPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
         durationMs = typeof np.durationMs === 'number' ? np.durationMs : 0;
         const trackKey = (np.title || '') + '|' + (np.artist || '');
         const now = fetchEnd;
@@ -1576,6 +1714,13 @@
     registerIcueOption('lyricSyncOffsetMs', 0, value => {
       const n = Number(value);
       optLyricSyncOffsetMs = Number.isFinite(n) ? n : 0;
+    });
+    registerIcueOption('listeningView', 0, value => {
+      const n = Number(value);
+      optListeningView = Number.isFinite(n) ? Math.max(0, Math.min(2, Math.round(n))) : 0;
+      // Re-apply if we're currently in listening mode so the user sees the
+      // submode change immediately without having to wait for idle to flip.
+      if (listeningMode) applyListeningMode();
     });
 
     pollOnce();
