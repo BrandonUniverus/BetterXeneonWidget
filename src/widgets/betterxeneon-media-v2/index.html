@@ -603,14 +603,21 @@
       font-size: clamp(15px, 2.8vmin, 22px);
       line-height: 1.5;
     }
-    /* EQ-as-background mode: clamp to 5 lines centered vertically. The
-       margin-top: auto splits .content's free space between (header →
-       lyrics) and (lyrics → progress) — combined with .progress's
-       existing margin-top: auto, the lyric band ends up centered. */
+    /* EQ-as-background mode: clamp to 5 lines, anchored near the bottom
+       just above the progress bar.
+         - .lyrics absorbs all the free space above it (margin-top: auto)
+         - .progress's normal margin-top: auto is overridden to 4px, so
+           it no longer competes for slack; lyrics drops to just above.
+         - .content's flex gap of 6px stacks with that 4px → ~10px
+           between the bottom lyric line and the progress bar, matching
+           the user-requested feel. */
     .root.eq-as-bg .lyrics {
       flex: 0 0 auto;
       height: calc(5 * 1.5em + 5 * 8px);
       margin-top: auto;
+    }
+    .root.eq-as-bg .progress {
+      margin-top: 4px;
     }
     /* Top/bottom fade overlays were using a hardcoded #0a0a0c page-bg
        color, which doubled as a darker rectangle on top of the album-art
