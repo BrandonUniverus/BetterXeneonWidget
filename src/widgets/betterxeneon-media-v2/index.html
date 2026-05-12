@@ -720,14 +720,20 @@
       font-size: clamp(15px, 2.8vmin, 22px);
       line-height: 1.5;
     }
-    /* EQ-as-background mode: clamp to 3 lines and let them flow
-       naturally right under the horizon line. No auto-margin on
-       .lyrics, so it sits in the flex column immediately below the
-       horizon (with .content's normal 6px gap). .progress keeps its
-       baseline margin-top: auto (from the non-eq-bg rule), so it
-       still pins to the bottom — the slack ends up between the
-       lyrics and the progress instead of above the lyrics. */
+    /* EQ-as-background mode: clamp to 3 lines, top edge anchored to
+       the spectrum's centerline (baseY = h*0.5 — the line where bars
+       meet their reflection). Stack order top-to-bottom is previous /
+       current / next via the existing translateY centering math —
+       current line sits at the visual middle of the 3-line viewport.
+       Positioned absolutely against .content so the flex flow of the
+       other items isn't disturbed. */
+    .root.eq-as-bg .content { position: relative; }
     .root.eq-as-bg .lyrics {
+      position: absolute;
+      top: calc(50% + 6px);
+      left: 0;
+      right: 0;
+      margin: 0;
       flex: 0 0 auto;
       height: calc(3 * 1.5em + 3 * 8px);
     }
