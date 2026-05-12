@@ -1881,6 +1881,7 @@
             label: 'Poll interval',
             sub: 'How often the widget refreshes',
             min: 500, max: 5000, step: 100, unit: 'ms' },
+          { type: 'spotify-disconnect-link' },
         ],
       },
       {
@@ -3014,6 +3015,44 @@
       return tabs;
     }
 
+    function renderSpotifyDisconnectRow() {
+      // Account-level action — dim red treatment so it reads as
+      // distinct from neutral options. Click → POSTs to /spotify/
+      // disconnect (host purges the token store) and the next poll
+      // flips spotifyAuthed back to false.
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'list-row';
+      row.style.marginTop = '8px';
+      row.style.borderTop = '1px solid rgba(255,255,255,0.08)';
+      row.style.paddingTop = '12px';
+      const icon = document.createElement('div');
+      icon.className = 'lr-art';
+      icon.style.display = 'flex';
+      icon.style.alignItems = 'center';
+      icon.style.justifyContent = 'center';
+      icon.style.fontSize = '22px';
+      icon.style.color = '#ff6b6b';
+      icon.textContent = '⏻';
+      const meta = document.createElement('div');
+      meta.className = 'lr-meta';
+      const name = document.createElement('div');
+      name.className = 'lr-name';
+      name.style.fontSize = '17px';
+      name.style.color = '#ff6b6b';
+      name.textContent = 'Disconnect Spotify';
+      const sub = document.createElement('div');
+      sub.className = 'lr-sub';
+      sub.style.fontSize = '14px';
+      sub.textContent = 'Sign out and clear stored tokens';
+      meta.appendChild(name);
+      meta.appendChild(sub);
+      row.appendChild(icon);
+      row.appendChild(meta);
+      row.addEventListener('click', disconnectSpotify);
+      return row;
+    }
+
     function renderAudioSourceLinkRow() {
       // Special-case row used in the Equalizer tab — opens the
       // audio-source sub-view that lists Windows render endpoints.
@@ -3058,6 +3097,10 @@
       for (const item of tab.items) {
         if (item.type === 'audio-source-link') {
           sec.appendChild(renderAudioSourceLinkRow());
+        } else if (item.type === 'spotify-disconnect-link') {
+          // Only meaningful when authed — silently skip otherwise so
+          // the General tab doesn't leak a dead row.
+          if (spotifyAuthed) sec.appendChild(renderSpotifyDisconnectRow());
         } else {
           sec.appendChild(renderSettingRow(item));
         }
