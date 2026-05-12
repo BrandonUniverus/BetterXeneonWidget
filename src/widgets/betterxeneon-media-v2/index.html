@@ -577,9 +577,16 @@
        (they'd fight for the same pixels). The foreground cover defaults
        to hidden too — atmosphere mode replaces the cover entirely — but
        the eqShowAlbumArt option flips that off and brings the cover back
-       so it sits alongside the bars. */
+       so it sits alongside the bars.
+       When the cover IS shown, drop its opacity so the bars behind it
+       remain visible — without this, the cover sits on top of the
+       canvas and hides the slice of spectrum directly behind it. The
+       cover stays plenty recognizable at 0.7. */
     .root.eq-as-bg .art-bg { display: none; }
     .root.eq-as-bg:not(.eq-show-art) .art { display: none; }
+    .root.eq-as-bg.eq-show-art .art {
+      opacity: 0.7;
+    }
 
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
