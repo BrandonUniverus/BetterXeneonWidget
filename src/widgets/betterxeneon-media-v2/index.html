@@ -483,9 +483,13 @@
       z-index: -1;     /* same plane as .art-bg */
       opacity: 0.4;    /* subordinate to content readability */
     }
-    /* When EQ is the background, hide the album-art bg so they don't fight
-       for the same pixels. */
-    .root.eq-as-bg .art-bg { display: none; }
+    /* When EQ is the background, hide BOTH album-art layers (blurred bg
+       and foreground cover). The visualizer becomes the atmosphere — the
+       cover would compete for the same pixels and dilute the effect. The
+       content column (title/artist/lyrics/transport) takes the layout
+       width art used to occupy. */
+    .root.eq-as-bg .art-bg,
+    .root.eq-as-bg .art { display: none; }
 
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
@@ -647,13 +651,17 @@
 </head>
 <body>
   <main class="root size-vertical" id="root">
-    <img class="art-bg" id="artBg" alt="" aria-hidden="true">
+    <!-- crossorigin: required so canvas getImageData on the foreground art
+         doesn't taint and we can extract the dominant color for the
+         equalizer's two-tone gradient. The host's CORS policy is wide
+         open so the request succeeds either way. -->
+    <img class="art-bg" id="artBg" alt="" aria-hidden="true" crossorigin="anonymous">
     <!-- Spectrum visualizer. SSE stream from /api/audio/spectrum/stream
          feeds the bar values; requestAnimationFrame redraws at ~60Hz.
          Hidden by default — only painted when listeningView=Equalizer is
          active in listening mode, or the eqBackground option is on. -->
     <canvas class="eq-canvas" id="eqCanvas" aria-hidden="true"></canvas>
-    <img class="art empty" id="art" alt="">
+    <img class="art empty" id="art" alt="" crossorigin="anonymous">
     <div class="content">
       <div class="header-row">
         <div class="text">
@@ -1211,6 +1219,118 @@
     let eqRAF = 0;
     let eqDpr = 1;
 
+    // Bar color. Two stops — bright top, darker bottom of the same hue —
+    // give the bars depth without needing per-album palette engineering.
+    // Default = Spotify green; we re-derive from the album cover on each
+    // track change. Falling back to green when no cover is loaded keeps
+    // the silhouette consistent during connection / startup.
+    const EQ_DEFAULT_TOP = [29, 185, 84];     // #1db954
+    const EQ_DEFAULT_BOT = [16, 92, 45];      // darker green
+    let eqColorTop = EQ_DEFAULT_TOP;
+    let eqColorBot = EQ_DEFAULT_BOT;
+
+    // --- Color helpers (RGB ↔ HSL) -------------------------------------
+    // We extract a dominant RGB from the cover, then go via HSL so we can
+    // hold hue constant and dial lightness up (top) / down (bottom) to
+    // produce the two-tone gradient.
+    function rgbToHsl(r, g, b) {
+      r /= 255; g /= 255; b /= 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const l = (max + min) / 2;
+      let h, s;
+      if (max === min) { h = 0; s = 0; }
+      else {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h /= 6;
+      }
+      return [h, s, l];
+    }
+    function hslToRgb(h, s, l) {
+      let r, g, b;
+      if (s === 0) { r = g = b = l; }
+      else {
+        const hue2rgb = (p, q, t) => {
+          if (t < 0) t += 1;
+          if (t > 1) t -= 1;
+          if (t < 1/6) return p + (q - p) * 6 * t;
+          if (t < 1/2) return q;
+          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          return p;
+        };
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1/3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1/3);
+      }
+      return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+    }
+
+    // Sample the album-art img into a 32×32 offscreen canvas, average the
+    // pixels that look "vibrant" (not near-black, not near-white, not
+    // near-gray). Skipping desaturated pixels avoids muddy results when
+    // covers have a black background — only the actual color content
+    // contributes. Returns null if no usable color is found.
+    const _eqExtractCanvas = document.createElement('canvas');
+    _eqExtractCanvas.width = 32;
+    _eqExtractCanvas.height = 32;
+    const _eqExtractCtx = _eqExtractCanvas.getContext('2d', { willReadFrequently: true });
+    function extractDominantColor(img) {
+      if (!img || !img.naturalWidth) return null;
+      try {
+        _eqExtractCtx.clearRect(0, 0, 32, 32);
+        _eqExtractCtx.drawImage(img, 0, 0, 32, 32);
+        const data = _eqExtractCtx.getImageData(0, 0, 32, 32).data;
+        let rs = 0, gs = 0, bs = 0, n = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const pr = data[i], pg = data[i+1], pb = data[i+2];
+          const lum = (pr + pg + pb) / 3;
+          if (lum < 25 || lum > 230) continue;          // skip near-black / near-white
+          const maxC = Math.max(pr, pg, pb);
+          const minC = Math.min(pr, pg, pb);
+          if (maxC - minC < 25) continue;                // skip near-gray
+          rs += pr; gs += pg; bs += pb; n++;
+        }
+        if (n === 0) return null;
+        return [Math.round(rs / n), Math.round(gs / n), Math.round(bs / n)];
+      } catch {
+        // Tainted canvas (cross-origin without CORS) or any other failure.
+        // The img tag has crossorigin="anonymous" and the host's CORS is
+        // wide open, but we guard anyway.
+        return null;
+      }
+    }
+
+    // Take a sampled RGB and derive a (top, bottom) pair for the two-tone
+    // bar gradient. Top sits in the bright/saturated quadrant; bottom is
+    // the same hue dropped to a darker lightness. Falls back to the
+    // Spotify-green pair when no usable color is found.
+    function deriveEqColors(rgb) {
+      if (!rgb) {
+        eqColorTop = EQ_DEFAULT_TOP;
+        eqColorBot = EQ_DEFAULT_BOT;
+        return;
+      }
+      const [h, s] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      // Floor the saturation so washed-out covers still produce a
+      // visible chroma swing. Cap it so highly-saturated covers don't
+      // produce neon eye-melt.
+      const boostS = Math.max(0.55, Math.min(0.9, s + 0.15));
+      eqColorTop = hslToRgb(h, boostS, 0.55);
+      eqColorBot = hslToRgb(h, boostS * 0.7, 0.28);
+    }
+
+    function updateEqColorsFromArt() {
+      // No-op when there's no art element rendered yet, or it's still
+      // loading. Caller re-invokes on 'load'.
+      const rgb = extractDominantColor(artEl);
+      deriveEqColors(rgb);
+    }
+
     function eqResize() {
       const rect = eqCanvas.getBoundingClientRect();
       eqDpr = window.devicePixelRatio || 1;
@@ -1296,36 +1416,56 @@
       }
     }
 
-    // Spotify-green spectrum bars — vertical gradient, fading mirror below
-    // the baseline, decaying peak caps. Same visual language as the
-    // prototype's drawBars, retuned for our color theme. Centered baseline
-    // when used as a backdrop, bottom-anchored when full-screen — the
-    // baseline ratio is the only mode-specific parameter.
+    // Spectrum bars — atmosphere-style layout.
+    //
+    // Bars grow UP from a centered baseline (h*0.5), capped at ~42% of
+    // canvas height so peaks leave a buffer below the title row at the
+    // top. Below the baseline, a reflection extends DOWN — it holds full
+    // opacity for the first half of its length, then fades to transparent
+    // over the second half. The result is bars "floating in atmosphere"
+    // with a reflection that bleeds into / behind the lyric area instead
+    // of staying confined to a thin strip below.
+    //
+    // Two-tone gradient per bar: bright at top, darker bottom. The hue
+    // is derived from the current album cover (see deriveEqColors); a
+    // mid-cover change snaps the palette to the new album.
+    //
+    // Mode differentiator: opacity only (controlled by CSS — .show-full
+    // = 1.0, .show-bg = 0.4). Geometry is identical so the visualizer
+    // feels like the same object whether it's the screensaver or sitting
+    // behind the content.
     function drawEqBars() {
       const rect = eqCanvas.getBoundingClientRect();
       const w = rect.width;
       const h = rect.height;
       if (w <= 0 || h <= 0) return;
-      // Cheap DPR drift check — devicePixelRatio can change if the user
-      // moves the widget to a different display.
       if ((window.devicePixelRatio || 1) !== eqDpr) eqResize();
 
-      // Soft trail — semi-transparent black wipe so bars leave a faint
-      // motion blur. Lower alpha = longer trails.
-      eqCtx.fillStyle = 'rgba(10, 10, 12, 0.35)';
+      // Soft trail — semi-transparent wipe so the bars leave a faint
+      // motion blur. The fade has to be visible against fully-transparent
+      // initial canvas in bg mode, so we clear-and-add rather than
+      // depending on the page background showing through.
+      eqCtx.fillStyle = 'rgba(10, 10, 12, 0.40)';
       eqCtx.fillRect(0, 0, w, h);
 
-      // In bg mode keep the visualization centered vertically (less
-      // competition with overlaid text); in full mode use the prototype's
-      // 0.82 baseline so the bars feel grounded.
-      const isFull = eqCanvas.classList.contains('show-full');
-      const baseY = isFull ? h * 0.82 : h * 0.62;
-      const maxH = isFull ? h * 0.62 : h * 0.48;
+      // Baseline at the vertical center. Bars grow up from here, the
+      // reflection extends below. maxH caps the bar height so peaks
+      // don't clip the title text at the top edge.
+      const baseY = h * 0.50;
+      const maxH = h * 0.42;
+      // Reflection length: same as the bar, so a tall bar has a tall
+      // reflection (proportional, looks more like real water reflection).
+      const reflectFactor = 1.0;
 
       const pad = w * 0.04;
       const innerW = w - pad * 2;
       const slot = innerW / EQ_BINS;
-      const barW = slot * 0.7;
+      const barW = slot * 0.72;
+
+      const ct = eqColorTop;
+      const cb = eqColorBot;
+      const topRgba = (a) => `rgba(${ct[0]},${ct[1]},${ct[2]},${a})`;
+      const botRgba = (a) => `rgba(${cb[0]},${cb[1]},${cb[2]},${a})`;
 
       for (let i = 0; i < EQ_BINS; i++) {
         const v = eqSpectrum[i];
@@ -1333,26 +1473,32 @@
         eqPeaks[i] = Math.max(eqPeaks[i] - 0.6, bh);
         const x = pad + i * slot + (slot - barW) / 2;
 
-        // Main bar gradient: bright at top, transparent at base.
+        // Main bar: bright top → darker bottom (two-tone, full opacity
+        // at the very top, slight fade to the base for that "rising from
+        // nothing" look).
         const grad = eqCtx.createLinearGradient(0, baseY - bh, 0, baseY);
-        grad.addColorStop(0, 'rgba(29, 185, 84, 1)');
-        grad.addColorStop(1, 'rgba(29, 185, 84, 0.25)');
+        grad.addColorStop(0, topRgba(1));
+        grad.addColorStop(0.6, topRgba(0.92));
+        grad.addColorStop(1, botRgba(0.55));
         eqCtx.fillStyle = grad;
         eqCtx.fillRect(x, baseY - bh, barW, bh);
 
-        // Mirror below baseline at 18% alpha — implies stereo/wave depth
-        // without forcing two channels of data.
-        eqCtx.globalAlpha = 0.18;
-        const mirrorH = bh * 0.55;
-        const g2 = eqCtx.createLinearGradient(0, baseY, 0, baseY + mirrorH);
-        g2.addColorStop(0, 'rgba(29, 185, 84, 0.6)');
-        g2.addColorStop(1, 'rgba(29, 185, 84, 0)');
-        eqCtx.fillStyle = g2;
-        eqCtx.fillRect(x, baseY, barW, mirrorH);
-        eqCtx.globalAlpha = 1;
+        // Reflection below baseline.
+        // - First 50% of reflection: hold near-full mirror opacity
+        // - Second 50%: fade linearly to transparent
+        // User request: "halfway it starts fading out slowly".
+        const reflH = bh * reflectFactor;
+        if (reflH > 1) {
+          const g2 = eqCtx.createLinearGradient(0, baseY, 0, baseY + reflH);
+          g2.addColorStop(0, botRgba(0.55));
+          g2.addColorStop(0.5, botRgba(0.5));   // halfway — still vivid
+          g2.addColorStop(1, botRgba(0));        // bottom — fully faded
+          eqCtx.fillStyle = g2;
+          eqCtx.fillRect(x, baseY, barW, reflH);
+        }
 
-        // Peak cap — 2px line that slowly falls toward the bar top.
-        eqCtx.fillStyle = 'rgba(29, 185, 84, 0.95)';
+        // Peak cap — thin line that decays toward the bar top.
+        eqCtx.fillStyle = topRgba(0.95);
         eqCtx.fillRect(x, baseY - eqPeaks[i] - 3, barW, 2);
       }
     }
@@ -1989,6 +2135,15 @@
     artEl.addEventListener('error', () => {
       artEl.classList.add('empty');
       lastHasArt = false;
+      // No cover → fall back to default green palette for the EQ.
+      deriveEqColors(null);
+    });
+    // On every album-art change, re-derive the equalizer's two-tone
+    // gradient from the new cover. extractDominantColor uses 32×32 of
+    // pixel data which is cheap (~30µs) so doing it on every load is
+    // fine. CORS lets the canvas read the cross-origin host response.
+    artEl.addEventListener('load', () => {
+      updateEqColorsFromArt();
     });
 
     // Register Behavior options. The handler fires once at registration
