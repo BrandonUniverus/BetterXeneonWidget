@@ -584,21 +584,31 @@
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
        avoids the scrollTo preemption flicker.)
-       Slightly bumped font + tighter line-height + explicit height
-       constrains the visible viewport to exactly 5 lines. The track
-       inside translateYs to keep the current line in the middle, so
-       what's visible is "current line ± 2".
-       flex: 0 0 auto + margin-top: auto splits the free space in
-       .content between (header → lyrics) and (lyrics → progress), so
-       the 5-line band ends up vertically centered. */
+
+       Default behavior: lyrics flex-fill all available space between the
+       header and the bottom bar, so the visible lyric count is whatever
+       fits naturally. This is the right look when there's no competing
+       background visualization.
+
+       When the EQ is the background (.root.eq-as-bg), the lyrics get
+       constrained to exactly 5 lines and vertically centered — see the
+       override below. The 5-line band leaves room above and below for
+       the spectrum to breathe without lyrics covering the bars. */
     .lyrics {
       position: relative;
-      flex: 0 0 auto;
+      flex: 1 1 auto;
       width: 100%;
+      min-height: 0;
       overflow: hidden;
       font-size: clamp(15px, 2.8vmin, 22px);
       line-height: 1.5;
-      /* 5 lines, each = (1.5em line-height + 8px padding-y). */
+    }
+    /* EQ-as-background mode: clamp to 5 lines centered vertically. The
+       margin-top: auto splits .content's free space between (header →
+       lyrics) and (lyrics → progress) — combined with .progress's
+       existing margin-top: auto, the lyric band ends up centered. */
+    .root.eq-as-bg .lyrics {
+      flex: 0 0 auto;
       height: calc(5 * 1.5em + 5 * 8px);
       margin-top: auto;
     }
