@@ -71,10 +71,31 @@
         data-type="switch"
         data-default="false">
 
+  <!-- Equalizer palette selector. 0 = colors derived from the current
+       album cover (uniform per-frame, single gradient). 1-5 are the
+       preset palette functions ported from the prototype — they assign
+       different hues across the spectrum and animate over time, so the
+       bars cycle through colors even during quiet passages. -->
+  <meta name="x-icue-property" content="eqPalette"
+        data-label="tr('Equalizer palette (0=Album, 1=Rainbow, 2=Neon, 3=Sunset, 4=Aurora, 5=Mono)')"
+        data-type="slider"
+        data-default="0"
+        data-min="0"
+        data-max="5"
+        data-step="1">
+
+  <!-- When equalizer is background, hide the foreground album cover by
+       default (matches the atmosphere-mode reference design). Flip on
+       to keep the cover visible alongside the bars. -->
+  <meta name="x-icue-property" content="eqShowAlbumArt"
+        data-label="tr('Show album art alongside equalizer background')"
+        data-type="switch"
+        data-default="false">
+
   <script id="x-icue-groups" type="application/json">
     [
       { "title": "tr('Behavior')", "properties": ["pollIntervalMs", "showLyrics", "lyricSyncOffsetMs"] },
-      { "title": "tr('Listening View')", "properties": ["autoExpand", "autoExpandAfterSec", "listeningView", "eqBackground"] }
+      { "title": "tr('Listening View')", "properties": ["autoExpand", "autoExpandAfterSec", "listeningView", "eqBackground", "eqPalette", "eqShowAlbumArt"] }
     ]
   </script>
 
@@ -483,13 +504,13 @@
       z-index: -1;     /* same plane as .art-bg */
       opacity: 0.4;    /* subordinate to content readability */
     }
-    /* When EQ is the background, hide BOTH album-art layers (blurred bg
-       and foreground cover). The visualizer becomes the atmosphere — the
-       cover would compete for the same pixels and dilute the effect. The
-       content column (title/artist/lyrics/transport) takes the layout
-       width art used to occupy. */
-    .root.eq-as-bg .art-bg,
-    .root.eq-as-bg .art { display: none; }
+    /* When EQ is the background, hide the blurred-cover bg layer always
+       (they'd fight for the same pixels). The foreground cover defaults
+       to hidden too — atmosphere mode replaces the cover entirely — but
+       the eqShowAlbumArt option flips that off and brings the cover back
+       so it sits alongside the bars. */
+    .root.eq-as-bg .art-bg { display: none; }
+    .root.eq-as-bg:not(.eq-show-art) .art { display: none; }
 
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
@@ -1228,6 +1249,63 @@
     const EQ_DEFAULT_BOT = [16, 92, 45];      // darker green
     let eqColorTop = EQ_DEFAULT_TOP;
     let eqColorBot = EQ_DEFAULT_BOT;
+    // Palette selector: 0 = album-derived (uniform), 1-5 = preset functions
+    // that vary per-bar AND animate over time (see PRESET_PALETTES). Tied
+    // to the eqPalette iCUE option.
+    let optEqPalette = 0;
+    let optEqShowAlbumArt = false;
+
+    // --- Preset palettes (ported from the Equalizer.zip prototype) ------
+    // Each is a function (t, time) → [r,g,b] where t ∈ [0,1] is the bar
+    // position across the spectrum and `time` is a seconds-clock used to
+    // animate the palette (rainbows cycle, neon/aurora/sunset slowly
+    // morph). Mono is time-independent — pure greyscale ramp.
+    function _eqHsl(h, s, l) {
+      // h: 0..360, s,l: 0..100. Standard formula; same one the prototype
+      // shipped with so the colors come out identical to the source.
+      s /= 100; l /= 100;
+      const k = (n) => (n + h / 30) % 12;
+      const a = s * Math.min(l, 1 - l);
+      const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+      return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+    }
+    function _eqLerpRGB(c1, c2, t) {
+      return [
+        c1[0] + (c2[0] - c1[0]) * t,
+        c1[1] + (c2[1] - c1[1]) * t,
+        c1[2] + (c2[2] - c1[2]) * t,
+      ];
+    }
+    const PRESET_PALETTES = {
+      rainbow(t, time) {
+        const h = ((t * 360) + time * 22) % 360;
+        return _eqHsl(h, 90, 58);
+      },
+      neon(t, time) {
+        const stops = [_eqHsl(180, 100, 60), _eqHsl(305, 100, 62), _eqHsl(50, 100, 60)];
+        const f = (t * 3 + time * 0.18) % 3;
+        const i = Math.floor(f), k = f - i;
+        return _eqLerpRGB(stops[i], stops[(i + 1) % 3], k);
+      },
+      sunset(t, time) {
+        const stops = [_eqHsl(355, 80, 55), _eqHsl(25, 90, 60), _eqHsl(290, 70, 55), _eqHsl(15, 85, 50)];
+        const f = (t * 4 + time * 0.07) % 4;
+        const i = Math.floor(f), k = f - i;
+        return _eqLerpRGB(stops[i], stops[(i + 1) % 4], k);
+      },
+      aurora(t, time) {
+        const stops = [_eqHsl(180, 75, 55), _eqHsl(150, 80, 55), _eqHsl(255, 70, 60), _eqHsl(200, 85, 55)];
+        const f = (t * 4 + time * 0.05) % 4;
+        const i = Math.floor(f), k = f - i;
+        return _eqLerpRGB(stops[i], stops[(i + 1) % 4], k);
+      },
+      mono(t /*, _time */) {
+        const v = Math.round(40 + t * 215);
+        return [v, v, v];
+      },
+    };
+    // Index 0 = null → use album-derived. Indices 1..5 map to palette names.
+    const PRESET_NAMES = [null, 'rainbow', 'neon', 'sunset', 'aurora', 'mono'];
 
     // --- Color helpers (RGB ↔ HSL) -------------------------------------
     // We extract a dominant RGB from the cover, then go via HSL so we can
@@ -1351,6 +1429,10 @@
       eqCanvas.classList.toggle('show-full', wantsFull);
       eqCanvas.classList.toggle('show-bg', wantsBg);
       rootEl.classList.toggle('eq-as-bg', wantsBg);
+      // Album-art-alongside-eq option. Only meaningful when eq is the
+      // background; in listening-equalizer mode (full submode) the CSS
+      // hides the cover regardless.
+      rootEl.classList.toggle('eq-show-art', wantsBg && optEqShowAlbumArt);
       if (wantsFull || wantsBg) {
         eqResize();
         ensureEqStream();
@@ -1462,10 +1544,16 @@
       const slot = innerW / EQ_BINS;
       const barW = slot * 0.72;
 
-      const ct = eqColorTop;
-      const cb = eqColorBot;
-      const topRgba = (a) => `rgba(${ct[0]},${ct[1]},${ct[2]},${a})`;
-      const botRgba = (a) => `rgba(${cb[0]},${cb[1]},${cb[2]},${a})`;
+      // Decide the per-bar color source. Album-derived (palette 0) reuses
+      // the same (top, bottom) pair for every bar — clean, atmospheric,
+      // tied to the cover. Preset palettes (1-5) sample a function per
+      // bar position AND with the elapsed time so the colors animate
+      // even during quiet passages.
+      const paletteName = PRESET_NAMES[optEqPalette];
+      const paletteFn = paletteName ? PRESET_PALETTES[paletteName] : null;
+      const elapsed = performance.now() / 1000;
+
+      const rgba = (c, a) => `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
 
       for (let i = 0; i < EQ_BINS; i++) {
         const v = eqSpectrum[i];
@@ -1473,13 +1561,23 @@
         eqPeaks[i] = Math.max(eqPeaks[i] - 0.6, bh);
         const x = pad + i * slot + (slot - barW) / 2;
 
-        // Main bar: bright top → darker bottom (two-tone, full opacity
-        // at the very top, slight fade to the base for that "rising from
-        // nothing" look).
+        // Resolve top + bottom colors for THIS bar.
+        let ct, cb;
+        if (paletteFn) {
+          ct = paletteFn(i / EQ_BINS, elapsed);
+          // Bottom = same color darkened to 40%. Keeps the per-bar hue
+          // identity while still giving each bar the two-tone gradient.
+          cb = [ct[0] * 0.4, ct[1] * 0.4, ct[2] * 0.4];
+        } else {
+          ct = eqColorTop;
+          cb = eqColorBot;
+        }
+
+        // Main bar: bright top → darker bottom (two-tone).
         const grad = eqCtx.createLinearGradient(0, baseY - bh, 0, baseY);
-        grad.addColorStop(0, topRgba(1));
-        grad.addColorStop(0.6, topRgba(0.92));
-        grad.addColorStop(1, botRgba(0.55));
+        grad.addColorStop(0, rgba(ct, 1));
+        grad.addColorStop(0.6, rgba(ct, 0.92));
+        grad.addColorStop(1, rgba(cb, 0.55));
         eqCtx.fillStyle = grad;
         eqCtx.fillRect(x, baseY - bh, barW, bh);
 
@@ -1490,15 +1588,15 @@
         const reflH = bh * reflectFactor;
         if (reflH > 1) {
           const g2 = eqCtx.createLinearGradient(0, baseY, 0, baseY + reflH);
-          g2.addColorStop(0, botRgba(0.55));
-          g2.addColorStop(0.5, botRgba(0.5));   // halfway — still vivid
-          g2.addColorStop(1, botRgba(0));        // bottom — fully faded
+          g2.addColorStop(0, rgba(cb, 0.55));
+          g2.addColorStop(0.5, rgba(cb, 0.5));   // halfway — still vivid
+          g2.addColorStop(1, rgba(cb, 0));        // bottom — fully faded
           eqCtx.fillStyle = g2;
           eqCtx.fillRect(x, baseY, barW, reflH);
         }
 
         // Peak cap — thin line that decays toward the bar top.
-        eqCtx.fillStyle = topRgba(0.95);
+        eqCtx.fillStyle = rgba(ct, 0.95);
         eqCtx.fillRect(x, baseY - eqPeaks[i] - 3, barW, 2);
       }
     }
@@ -2203,6 +2301,16 @@
     });
     registerIcueOption('eqBackground', false, value => {
       optEqBackground = value === true || value === 'true';
+      applyEqVisibility();
+    });
+    registerIcueOption('eqPalette', 0, value => {
+      const n = Number(value);
+      optEqPalette = Number.isFinite(n) ? Math.max(0, Math.min(5, Math.round(n))) : 0;
+      // No visibility change — the next draw frame picks it up. The rAF
+      // loop reads optEqPalette and PRESET_NAMES on each tick.
+    });
+    registerIcueOption('eqShowAlbumArt', false, value => {
+      optEqShowAlbumArt = value === true || value === 'true';
       applyEqVisibility();
     });
 
