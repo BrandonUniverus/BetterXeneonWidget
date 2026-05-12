@@ -396,7 +396,10 @@
     .queue-btn svg { width: 60%; height: 60%; pointer-events: none; }
 
     /* List view (queue or playlists) — fills the same slot the lyrics
-       container does in the content column. */
+       container does in the content column. Flex column so children
+       can use margin-top: auto to anchor themselves (in particular,
+       the empty-state message in the queue view sits just above the
+       progress bar instead of floating in the middle). */
     .list-view {
       flex: 1 1 auto;
       width: 100%;
@@ -404,6 +407,14 @@
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
       font-size: clamp(12px, 2.2vmin, 16px);
+      display: flex;
+      flex-direction: column;
+    }
+    /* Empty queue / no-playlists message: anchor at the bottom of the
+       list-view so it sits right above the progress bar. */
+    .list-view .list-empty {
+      margin-top: auto;
+      padding: 12px;
     }
     .list-view::-webkit-scrollbar { width: 6px; }
     .list-view::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
@@ -453,10 +464,12 @@
       white-space: nowrap;
     }
     .list-empty {
+      /* Padding is overridden when inside .list-view (the auto-margin
+         path keeps the message close to the progress bar). */
       padding: 30px 12px;
       text-align: center;
       font-size: 12px;
-      opacity: 0.5;
+      opacity: 0.55;
     }
 
     /* List-view header — only used in playlists mode for now, holds the
@@ -584,6 +597,28 @@
     .root.eq-as-bg .art-bg { display: none; }
     .root.eq-as-bg:not(.eq-show-art) .art { display: none; }
 
+    /* Horizon line — a thin themed accent line that sits just below the
+       header (under the Spotify source chip). The equalizer bars peak
+       exactly at this line at full amplitude — so the horizon doubles
+       as a fixed visual reference AND as the "ceiling" for the
+       spectrum. Always shown when EQ visible / lyrics-or-queue modes,
+       only hidden in listening-equalizer (where content is gone).
+       Z-index 0 (default) keeps it above the bg canvas but behind the
+       full-screen canvas, which is appropriate. */
+    .horizon {
+      flex: 0 0 auto;
+      height: 1px;
+      margin: 4px 0;
+      background: linear-gradient(to right,
+        transparent 0%,
+        rgba(var(--theme-accent-rgb), 0.25) 15%,
+        rgba(var(--theme-accent-rgb), 0.45) 50%,
+        rgba(var(--theme-accent-rgb), 0.25) 85%,
+        transparent 100%);
+      pointer-events: none;
+    }
+    .root.listening-equalizer .horizon { display: none; }
+
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
        avoids the scrollTo preemption flicker.)
@@ -638,16 +673,28 @@
     }
     .lyrics .line {
       padding: 4px 8px;
-      opacity: 0.35;
+      opacity: 0.30;
       color: #fff;
+      font-weight: 500;
       text-align: center;       /* always centered — see UX note in commit history */
-      transition: opacity 250ms, color 250ms;
+      letter-spacing: 0;
+      transition: opacity 250ms, color 250ms, font-size 200ms,
+                  font-weight 200ms, letter-spacing 200ms, text-shadow 250ms;
     }
-    .lyrics .line.past { opacity: 0.4; }
+    .lyrics .line.past { opacity: 0.45; }
+    /* Current line: bigger, bolder, themed-accent color, and a soft
+       glow in the same accent so it reads as the focus even when
+       overlapping the spectrum reflection behind it. Letter-spacing
+       tightens slightly for visual gravity. */
     .lyrics .line.current {
       opacity: 1;
       color: var(--theme-accent);
-      font-weight: 700;
+      font-weight: 800;
+      font-size: 1.15em;
+      letter-spacing: -0.01em;
+      text-shadow:
+        0 0 12px rgba(var(--theme-accent-rgb), 0.35),
+        0 1px 2px rgba(0, 0, 0, 0.6);
     }
     .lyrics.hidden { display: none; }
 
@@ -809,6 +856,9 @@
           </button>
         </div>
       </div>
+      <!-- Horizon line — visible reference at the spectrum's max-peak
+           level. Stays under the source chip; bars peak exactly here. -->
+      <div class="horizon" id="horizon" aria-hidden="true"></div>
       <!-- Lyrics container. Visible when view='lyrics' AND lyrics found. -->
       <div class="lyrics empty" id="lyrics"></div>
       <!-- Queue + Playlists list. Visible when view='queue' or 'playlists'.
@@ -1750,11 +1800,27 @@
       eqCtx.fillStyle = 'rgba(10, 10, 12, 0.40)';
       eqCtx.fillRect(0, 0, w, h);
 
-      // Baseline at the vertical center. Bars grow up from here, the
-      // reflection extends below. maxH caps the bar height so peaks
-      // don't clip the title text at the top edge.
+      // Baseline at the vertical center. Bars grow up from here. maxH
+      // caps the bar height so peaks land exactly on the horizon line
+      // (a themed accent line rendered just under the source chip).
+      // We read the horizon's real Y via getBoundingClientRect so the
+      // peaks track its position regardless of layout (size-wide vs
+      // size-vertical changes where the horizon ends up).
       const baseY = h * 0.50;
-      const maxH = h * 0.42;
+      let maxH = h * 0.42;
+      const horizonEl = document.getElementById('horizon');
+      if (horizonEl) {
+        const hr = horizonEl.getBoundingClientRect();
+        const cr = eqCanvas.getBoundingClientRect();
+        if (hr.height >= 0 && hr.width > 0) {
+          const horizonY = hr.top - cr.top + hr.height / 2;
+          // Clamp: don't let maxH go absurd if the horizon is below
+          // the baseline (would invert) or so close that bars are
+          // invisible.
+          const candidate = baseY - horizonY;
+          if (candidate > h * 0.10) maxH = Math.min(maxH, candidate);
+        }
+      }
       // Reflection length: same as the bar, so a tall bar has a tall
       // reflection (proportional, looks more like real water reflection).
       const reflectFactor = 1.0;
