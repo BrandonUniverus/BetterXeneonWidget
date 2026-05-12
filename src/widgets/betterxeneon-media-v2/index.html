@@ -526,13 +526,14 @@
       flex: 1 1 0;
       min-width: 0;
       padding: 8px 4px;
-      border: none;
+      border: 1px solid var(--theme-accent);
       background: transparent;
-      color: rgba(255, 255, 255, 0.65);
+      color: rgba(255, 255, 255, 0.78);
       cursor: pointer;
       border-radius: 6px;
       font-size: 15px;
       font-weight: 600;
+      box-sizing: border-box;
       touch-action: manipulation;
       transition: background 150ms, color 150ms;
     }
@@ -540,7 +541,9 @@
       background: var(--theme-accent);
       color: var(--theme-accent-fg);
     }
-    .settings-seg button:not(.active):hover { background: rgba(255, 255, 255, 0.05); }
+    .settings-seg button:not(.active):hover {
+      background: rgba(var(--theme-accent-rgb), 0.12);
+    }
 
     /* Slider — native range, themed. */
     .settings-row-slider { flex-direction: column; align-items: stretch; }
