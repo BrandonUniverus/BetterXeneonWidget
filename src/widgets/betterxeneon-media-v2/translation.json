@@ -11,5 +11,6 @@
   "Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer)": "Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer)",
   "Use equalizer as background (instead of album art blur)": "Use equalizer as background (instead of album art blur)",
   "Equalizer palette (0=Album, 1=Rainbow, 2=Neon, 3=Sunset, 4=Aurora, 5=Mono)": "Equalizer palette (0=Album, 1=Rainbow, 2=Neon, 3=Sunset, 4=Aurora, 5=Mono)",
+  "Theme (0=Album, 1=Rainbow, 2=Neon, 3=Sunset, 4=Aurora, 5=Mono)": "Theme (0=Album, 1=Rainbow, 2=Neon, 3=Sunset, 4=Aurora, 5=Mono)",
   "Show album art alongside equalizer background": "Show album art alongside equalizer background"
 }

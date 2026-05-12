@@ -71,13 +71,19 @@
         data-type="switch"
         data-default="false">
 
-  <!-- Equalizer palette selector. 0 = colors derived from the current
-       album cover (uniform per-frame, single gradient). 1-5 are the
-       preset palette functions ported from the prototype — they assign
-       different hues across the spectrum and animate over time, so the
-       bars cycle through colors even during quiet passages. -->
-  <meta name="x-icue-property" content="eqPalette"
-        data-label="tr('Equalizer palette (0=Album, 1=Rainbow, 2=Neon, 3=Sunset, 4=Aurora, 5=Mono)')"
+  <!-- Theme — drives every accent color in the widget: play button,
+       progress fill, source chip, current-lyric color, lib/queue buttons,
+       active states, pulse indicator, list-row hovers, AND the equalizer
+       bar palette. One slider, total visual coherence.
+         0 = Album       — accent derived from current cover art; bars use
+                           single album-gradient (same color all bars)
+         1 = Rainbow     — hot-pink accent; bars cycle the full hue wheel
+         2 = Neon        — cyan accent; bars morph cyan↔magenta↔yellow
+         3 = Sunset      — pink accent; bars red→orange→purple→red
+         4 = Aurora      — teal accent; bars teal→green→violet (reference)
+         5 = Mono        — white accent; bars greyscale ramp -->
+  <meta name="x-icue-property" content="theme"
+        data-label="tr('Theme (0=Album, 1=Rainbow, 2=Neon, 3=Sunset, 4=Aurora, 5=Mono)')"
         data-type="slider"
         data-default="0"
         data-min="0"
@@ -95,11 +101,74 @@
   <script id="x-icue-groups" type="application/json">
     [
       { "title": "tr('Behavior')", "properties": ["pollIntervalMs", "showLyrics", "lyricSyncOffsetMs"] },
-      { "title": "tr('Listening View')", "properties": ["autoExpand", "autoExpandAfterSec", "listeningView", "eqBackground", "eqPalette", "eqShowAlbumArt"] }
+      { "title": "tr('Listening View')", "properties": ["autoExpand", "autoExpandAfterSec", "listeningView", "eqBackground", "theme", "eqShowAlbumArt"] }
     ]
   </script>
 
   <style>
+    /* ---- Theme system ----------------------------------------------------
+       One iCUE option ("Theme") drives EVERY accent color across the
+       widget — play button, source chip, lyric current-line, progress
+       bar fill, queue / playlist actives, pulse indicator, list rows.
+       That keeps the whole widget coherent regardless of which preset
+       is active.
+
+       Each theme defines four custom properties:
+         --theme-accent       hex form, used directly as fill/color
+         --theme-accent-rgb   comma-separated RGB, used in rgba(...) for
+                              low-opacity hovers / dims (CSS vars can't
+                              be modulated by alpha without color-mix or
+                              this split-rgb trick)
+         --theme-accent-fg    text color that reads against --theme-accent
+                              (the play button glyph, etc.)
+         --theme-accent-dim   darker shade for inactive / muted states
+
+       Defaults below = Spotify green (the previous hardcoded value).
+       The .theme-* class rules override these. The album theme is
+       special: it stays on the defaults but JS overrides the
+       properties inline based on the sampled cover color, so it tracks
+       the current track automatically. */
+    :root {
+      --theme-accent: #1db954;
+      --theme-accent-rgb: 29, 185, 84;
+      --theme-accent-fg: #08130c;
+      --theme-accent-dim: #14823c;
+    }
+    .theme-rainbow {
+      /* Rainbow palette cycles, so we pick a single accent that doesn't
+         clash with any spoke: a saturated hot-pink reads as neutral
+         against the rest of the rainbow wheel. */
+      --theme-accent: #ff3b6b;
+      --theme-accent-rgb: 255, 59, 107;
+      --theme-accent-fg: #1a0008;
+      --theme-accent-dim: #7f1d36;
+    }
+    .theme-neon {
+      --theme-accent: #00e5ff;
+      --theme-accent-rgb: 0, 229, 255;
+      --theme-accent-fg: #001114;
+      --theme-accent-dim: #007a85;
+    }
+    .theme-sunset {
+      --theme-accent: #ff5e87;
+      --theme-accent-rgb: 255, 94, 135;
+      --theme-accent-fg: #1f0008;
+      --theme-accent-dim: #8e3144;
+    }
+    .theme-aurora {
+      /* The look from the reference screenshot you preferred. */
+      --theme-accent: #3ce0ff;
+      --theme-accent-rgb: 60, 224, 255;
+      --theme-accent-fg: #002028;
+      --theme-accent-dim: #1a6f80;
+    }
+    .theme-mono {
+      --theme-accent: #ffffff;
+      --theme-accent-rgb: 255, 255, 255;
+      --theme-accent-fg: #000000;
+      --theme-accent-dim: #666666;
+    }
+
     html, body {
       margin: 0;
       padding: 0;
@@ -249,12 +318,12 @@
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: #1db954;
+      background: var(--theme-accent);
       flex-shrink: 0;
     }
     .source .name {
       font-weight: 700;
-      color: #1db954;
+      color: var(--theme-accent);
     }
     .source .album {
       opacity: 0.85;
@@ -299,7 +368,7 @@
       text-transform: uppercase;
       font-weight: 700;
       letter-spacing: 0.08em;
-      color: #1db954;
+      color: var(--theme-accent);
       margin-right: 6px;
     }
     .queue-btn {
@@ -309,7 +378,7 @@
       border-radius: 50%;
       border: none;
       background: rgba(255, 255, 255, 0.08);
-      color: #1db954;        /* tint the glyph green by default — clearer affordance */
+      color: var(--theme-accent);  /* tint the glyph with accent — clearer affordance */
       display: flex;
       align-items: center;
       justify-content: center;
@@ -318,10 +387,10 @@
       touch-action: manipulation;
       transition: background 80ms, color 80ms;
     }
-    .queue-btn:hover, .queue-btn:active { background: rgba(29, 185, 84, 0.2); }
+    .queue-btn:hover, .queue-btn:active { background: rgba(var(--theme-accent-rgb), 0.2); }
     .queue-btn.active {
-      background: #1db954;
-      color: #08130c;        /* invert when active — same treatment as play button */
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);   /* invert when active — same treatment as play button */
     }
     .queue-btn.hidden { display: none; }
     .queue-btn svg { width: 60%; height: 60%; pointer-events: none; }
@@ -405,9 +474,9 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      background: rgba(29, 185, 84, 0.15);
+      background: rgba(var(--theme-accent-rgb), 0.15);
       border: none;
-      color: #1db954;
+      color: var(--theme-accent);
       font-size: 12px;
       font-weight: 700;
       letter-spacing: 0.04em;
@@ -418,7 +487,7 @@
       touch-action: manipulation;
       transition: background 80ms;
     }
-    .list-back:hover, .list-back:active { background: rgba(29, 185, 84, 0.3); }
+    .list-back:hover, .list-back:active { background: rgba(var(--theme-accent-rgb), 0.3); }
     .list-back svg { width: 14px; height: 14px; pointer-events: none; }
     .list-header .lh-title {
       flex: 1 1 auto;
@@ -514,15 +583,24 @@
 
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
-       avoids the scrollTo preemption flicker.) */
+       avoids the scrollTo preemption flicker.)
+       Slightly bumped font + tighter line-height + explicit height
+       constrains the visible viewport to exactly 5 lines. The track
+       inside translateYs to keep the current line in the middle, so
+       what's visible is "current line ± 2".
+       flex: 0 0 auto + margin-top: auto splits the free space in
+       .content between (header → lyrics) and (lyrics → progress), so
+       the 5-line band ends up vertically centered. */
     .lyrics {
       position: relative;
-      flex: 1 1 auto;
+      flex: 0 0 auto;
       width: 100%;
-      min-height: 0;
       overflow: hidden;
-      font-size: clamp(13px, 2.4vmin, 18px);
+      font-size: clamp(15px, 2.8vmin, 22px);
       line-height: 1.5;
+      /* 5 lines, each = (1.5em line-height + 8px padding-y). */
+      height: calc(5 * 1.5em + 5 * 8px);
+      margin-top: auto;
     }
     /* Top/bottom fade overlays were using a hardcoded #0a0a0c page-bg
        color, which doubled as a darker rectangle on top of the album-art
@@ -548,7 +626,7 @@
     .lyrics .line.past { opacity: 0.4; }
     .lyrics .line.current {
       opacity: 1;
-      color: #1db954;
+      color: var(--theme-accent);
       font-weight: 700;
     }
     .lyrics.hidden { display: none; }
@@ -580,7 +658,7 @@
     .progress .fill {
       position: absolute;
       inset: 0;
-      background: #1db954;
+      background: var(--theme-accent);
       transform-origin: left center;
       transform: scaleX(0);
       will-change: transform;
@@ -632,20 +710,20 @@
       fill: currentColor;
     }
     .t-btn.center {
-      background: #1db954;
-      color: #08130c;
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);
     }
-    /* Connect/Playlists slot — Spotify-green tinted to match the source
+    /* Connect / Playlists slot — accent-tinted to match the source
        chip color, but a subtler treatment than the play button. When the
        button is "active" (we're already in the playlists view, so the
-       icon is a back arrow), invert to a filled green pill — same
+       icon is a back arrow), invert to a filled accent pill — same
        language as the queue button's active state. */
     .t-btn.lib {
-      color: #1db954;
+      color: var(--theme-accent);
     }
     .t-btn.lib.active {
-      background: #1db954;
-      color: #08130c;
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);
     }
 
     .phase {
@@ -660,7 +738,7 @@
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: #1db954;
+      background: var(--theme-accent);
       margin-right: 8px;
       vertical-align: middle;
       transition: opacity 200ms;
@@ -1249,11 +1327,18 @@
     const EQ_DEFAULT_BOT = [16, 92, 45];      // darker green
     let eqColorTop = EQ_DEFAULT_TOP;
     let eqColorBot = EQ_DEFAULT_BOT;
-    // Palette selector: 0 = album-derived (uniform), 1-5 = preset functions
-    // that vary per-bar AND animate over time (see PRESET_PALETTES). Tied
-    // to the eqPalette iCUE option.
-    let optEqPalette = 0;
+    // Theme selector: 0 = album-derived (uniform single gradient bars +
+    // accent extracted from cover art), 1-5 = preset palette functions
+    // that vary per-bar AND animate over time (see PRESET_PALETTES).
+    // The chosen theme also drives every CSS accent (play button,
+    // progress fill, source chip, current lyric, etc.) via the
+    // .theme-* class on rootEl. Tied to the `theme` iCUE option.
+    let optTheme = 0;
     let optEqShowAlbumArt = false;
+    // List of theme class names (1-indexed in optTheme). Index 0 is null
+    // because the album theme doesn't use a class — its accent values
+    // are set inline by JS so they track the current cover.
+    const THEME_NAMES = [null, 'rainbow', 'neon', 'sunset', 'aurora', 'mono'];
 
     // --- Preset palettes (ported from the Equalizer.zip prototype) ------
     // Each is a function (t, time) → [r,g,b] where t ∈ [0,1] is the bar
@@ -1304,8 +1389,8 @@
         return [v, v, v];
       },
     };
-    // Index 0 = null → use album-derived. Indices 1..5 map to palette names.
-    const PRESET_NAMES = [null, 'rainbow', 'neon', 'sunset', 'aurora', 'mono'];
+    // (THEME_NAMES is declared earlier — it shares the same 0..5 mapping
+    // as both palette dispatch and CSS theme class application.)
 
     // --- Color helpers (RGB ↔ HSL) -------------------------------------
     // We extract a dominant RGB from the cover, then go via HSL so we can
@@ -1421,6 +1506,44 @@
 
     function eqWanted() {
       return (listeningMode && optListeningView === 2) || optEqBackground;
+    }
+
+    // Apply the user's selected theme to the root element. Drives every
+    // accent color via the CSS custom properties declared on .theme-*
+    // classes. The "album" theme (index 0) is special — it doesn't use a
+    // class; instead JS writes the sampled cover color directly to the
+    // root's inline style so the accent tracks each new track.
+    function applyTheme() {
+      const cls = rootEl.classList;
+      // Strip any prior theme-* class — only one should be active at a time.
+      for (const c of Array.from(cls)) {
+        if (c.startsWith('theme-')) cls.remove(c);
+      }
+      // Clear inline overrides every time. The album branch re-sets them
+      // immediately; non-album themes leave them cleared so the CSS class
+      // values win.
+      rootEl.style.removeProperty('--theme-accent');
+      rootEl.style.removeProperty('--theme-accent-rgb');
+      rootEl.style.removeProperty('--theme-accent-fg');
+      rootEl.style.removeProperty('--theme-accent-dim');
+
+      const name = THEME_NAMES[optTheme];
+      if (name === null) {
+        // Album theme. eqColorTop / eqColorBot were already computed from
+        // the cover by deriveEqColors. Synthesize a foreground color by
+        // picking white or dark depending on which has more contrast
+        // against the accent (so the play-button glyph stays legible
+        // regardless of whether the album is pastel or saturated).
+        const ct = eqColorTop, cb = eqColorBot;
+        const luminance = (0.2126 * ct[0] + 0.7152 * ct[1] + 0.0722 * ct[2]) / 255;
+        const fg = luminance > 0.6 ? '#08130c' : '#ffffff';
+        rootEl.style.setProperty('--theme-accent', `rgb(${ct[0]},${ct[1]},${ct[2]})`);
+        rootEl.style.setProperty('--theme-accent-rgb', `${ct[0]}, ${ct[1]}, ${ct[2]}`);
+        rootEl.style.setProperty('--theme-accent-fg', fg);
+        rootEl.style.setProperty('--theme-accent-dim', `rgb(${cb[0]},${cb[1]},${cb[2]})`);
+      } else {
+        cls.add('theme-' + name);
+      }
     }
 
     function applyEqVisibility() {
@@ -1549,7 +1672,7 @@
       // tied to the cover. Preset palettes (1-5) sample a function per
       // bar position AND with the elapsed time so the colors animate
       // even during quiet passages.
-      const paletteName = PRESET_NAMES[optEqPalette];
+      const paletteName = THEME_NAMES[optTheme];
       const paletteFn = paletteName ? PRESET_PALETTES[paletteName] : null;
       const elapsed = performance.now() / 1000;
 
@@ -2235,13 +2358,19 @@
       lastHasArt = false;
       // No cover → fall back to default green palette for the EQ.
       deriveEqColors(null);
+      // Album theme also re-syncs to the default green accent.
+      if (optTheme === 0) applyTheme();
     });
     // On every album-art change, re-derive the equalizer's two-tone
     // gradient from the new cover. extractDominantColor uses 32×32 of
     // pixel data which is cheap (~30µs) so doing it on every load is
     // fine. CORS lets the canvas read the cross-origin host response.
+    // For the Album theme, also refresh the global accent so the play
+    // button / progress fill / current lyric color all shift with the
+    // new cover.
     artEl.addEventListener('load', () => {
       updateEqColorsFromArt();
+      if (optTheme === 0) applyTheme();
     });
 
     // Register Behavior options. The handler fires once at registration
@@ -2303,11 +2432,10 @@
       optEqBackground = value === true || value === 'true';
       applyEqVisibility();
     });
-    registerIcueOption('eqPalette', 0, value => {
+    registerIcueOption('theme', 0, value => {
       const n = Number(value);
-      optEqPalette = Number.isFinite(n) ? Math.max(0, Math.min(5, Math.round(n))) : 0;
-      // No visibility change — the next draw frame picks it up. The rAF
-      // loop reads optEqPalette and PRESET_NAMES on each tick.
+      optTheme = Number.isFinite(n) ? Math.max(0, Math.min(5, Math.round(n))) : 0;
+      applyTheme();
     });
     registerIcueOption('eqShowAlbumArt', false, value => {
       optEqShowAlbumArt = value === true || value === 'true';
