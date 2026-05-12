@@ -24,6 +24,11 @@ public sealed record NowPlayingDto(
     // highlighter and progress display. Both are 0 if SMTC didn't expose
     // a timeline (rare — most apps publish it).
     long PositionMs,
-    long DurationMs);
+    long DurationMs,
+    // UTC wall-clock time when PositionMs was sampled/extrapolated. The
+    // widget maps this to performance.now() so host work after sampling
+    // (album-art cache refresh, JSON serialization, localhost transport)
+    // does not become lyric-sync drift.
+    long PositionCapturedAtUtcMs);
 
 public sealed record MediaCommandResult(bool Ok, string? Error);

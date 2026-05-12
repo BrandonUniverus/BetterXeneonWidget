@@ -409,25 +409,54 @@
     }
 
     /* --- Settings view controls -----------------------------------------
-       Rendered inside listView when currentView === 'settings'. Section
-       titles + rows of label + control (switch / segmented / slider). */
-    .settings-section {
-      margin-bottom: 10px;
+       Tabbed panel rendered inside listView when currentView === 'settings'.
+       Tab pills at top, then rows of label + control (switch / segmented /
+       slider) for the active tab only. Font sizes bumped ~4px across the
+       board so the touchscreen reads at arm's length. */
+
+    /* Tab pill bar */
+    .settings-tabs {
+      display: flex;
+      gap: 6px;
+      margin: 0 0 14px;
     }
-    .settings-section-title {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      opacity: 0.55;
-      padding: 12px 8px 6px;
-      color: var(--theme-accent);
+    .settings-tab {
+      flex: 1 1 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 9px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.55);
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 150ms, color 150ms, border-color 150ms;
+    }
+    .settings-tab svg {
+      width: 16px;
+      height: 16px;
+      pointer-events: none;
+    }
+    .settings-tab.active {
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);
+      border-color: var(--theme-accent);
+    }
+
+    .settings-section {
+      margin-bottom: 6px;
     }
     .settings-row {
       display: flex;
       align-items: center;
       gap: 12px;
-      padding: 8px 8px;
+      padding: 10px 8px;
       border-radius: 6px;
     }
     .settings-row .settings-meta {
@@ -436,67 +465,73 @@
     }
     .settings-row .settings-name {
       font-weight: 600;
-      font-size: 13px;
+      font-size: 17px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .settings-row .settings-sub {
-      font-size: 11px;
+      font-size: 14px;
       opacity: 0.55;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      margin-top: 2px;
     }
 
-    /* Pill toggle — like Spotify's settings toggles. */
+    /* Pill toggle — black pill, accent-colored thumb when ON, dim white
+       thumb when OFF. Bigger (54×30) for the touchscreen target. */
     .settings-toggle {
       flex: 0 0 auto;
-      width: 44px;
-      height: 24px;
+      width: 54px;
+      height: 30px;
       border-radius: 999px;
-      border: none;
-      background: rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: #000;
       position: relative;
       cursor: pointer;
       padding: 0;
       touch-action: manipulation;
-      transition: background 180ms;
+      transition: border-color 180ms;
     }
-    .settings-toggle[data-on="1"] { background: var(--theme-accent); }
+    .settings-toggle[data-on="1"] {
+      border-color: var(--theme-accent);
+    }
     .settings-toggle-thumb {
       position: absolute;
-      top: 2px;
-      left: 2px;
-      width: 20px;
-      height: 20px;
+      top: 3px;
+      left: 3px;
+      width: 22px;
+      height: 22px;
       border-radius: 50%;
-      background: #fff;
-      transition: transform 180ms;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      background: rgba(255, 255, 255, 0.45);
+      transition: transform 180ms, background 180ms;
     }
-    .settings-toggle[data-on="1"] .settings-toggle-thumb { transform: translateX(20px); }
+    .settings-toggle[data-on="1"] .settings-toggle-thumb {
+      transform: translateX(24px);
+      background: var(--theme-accent);
+    }
 
     /* Segmented control — row of buttons, one active. */
     .settings-row-segment { flex-direction: column; align-items: stretch; }
-    .settings-row-segment .settings-meta { margin-bottom: 6px; }
+    .settings-row-segment .settings-meta { margin-bottom: 8px; }
     .settings-seg {
       display: flex;
-      gap: 2px;
-      background: rgba(255, 255, 255, 0.07);
-      padding: 3px;
-      border-radius: 7px;
+      gap: 3px;
+      background: rgba(0, 0, 0, 0.55);
+      padding: 4px;
+      border-radius: 8px;
     }
     .settings-seg button {
       flex: 1 1 0;
       min-width: 0;
-      padding: 6px 4px;
+      padding: 8px 4px;
       border: none;
       background: transparent;
-      color: rgba(255, 255, 255, 0.6);
+      color: rgba(255, 255, 255, 0.65);
       cursor: pointer;
-      border-radius: 5px;
-      font-size: 11px;
+      border-radius: 6px;
+      font-size: 15px;
       font-weight: 600;
       touch-action: manipulation;
       transition: background 150ms, color 150ms;
@@ -509,18 +544,19 @@
 
     /* Slider — native range, themed. */
     .settings-row-slider { flex-direction: column; align-items: stretch; }
-    .settings-row-slider .settings-meta { margin-bottom: 4px; }
     .settings-row-slider .settings-meta {
       display: flex;
       align-items: baseline;
       justify-content: space-between;
       gap: 12px;
+      margin-bottom: 6px;
     }
     .settings-row-slider .settings-value {
-      font-size: 12px;
+      font-size: 16px;
       font-variant-numeric: tabular-nums;
       color: var(--theme-accent);
-      font-weight: 600;
+      font-weight: 700;
+      flex: 0 0 auto;
     }
     .settings-slider {
       -webkit-appearance: none;
@@ -535,8 +571,8 @@
     .settings-slider::-webkit-slider-thumb {
       -webkit-appearance: none;
       appearance: none;
-      width: 20px;
-      height: 20px;
+      width: 22px;
+      height: 22px;
       border-radius: 50%;
       background: var(--theme-accent);
       cursor: pointer;
@@ -645,9 +681,9 @@
     .root.listening-album .art.empty { visibility: visible; opacity: 0.2; }
 
     /* Equalizer submode: real-time spectrum bars via WASAPI loopback on
-       the host. The canvas is always in the DOM; CSS classes flip its
+       the host. The visualizer is always in the DOM; CSS classes flip its
        visibility based on listening-equalizer (full-screen) or
-       eq-background (dimmed backdrop). See .eq-canvas rules below. */
+       eq-background (dimmed backdrop). See .eq-visualizer rules below. */
     .root.listening-equalizer .art,
     .root.listening-equalizer .art-bg,
     .root.listening-equalizer .content { display: none; }
@@ -656,38 +692,95 @@
       justify-content: center;
     }
 
-    /* EQ canvas — full-bleed, hidden by default. Two visible states:
+    /* EQ visualizer — full-bleed, hidden by default. Two visible states:
          .show-full  — listening-equalizer submode, vivid, in front
-         .show-bg    — eqBackground option on, dim, behind everything
+         .show-bg    — eqBackground option on, behind the UI on a normal
+                       positive layer. Avoid negative z-index + opacity:
+                       QtWebEngine/iCUE can flash those compositor layers.
        Mutually exclusive; full takes precedence when both apply. */
-    .eq-canvas {
+    .eq-visualizer {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
       display: none;
       pointer-events: none;
+      overflow: hidden;
+      contain: layout paint style;
     }
-    .eq-canvas.show-full {
+    .eq-visualizer.show-full {
       display: block;
       z-index: 5;
       opacity: 1;
     }
-    .eq-canvas.show-bg {
+    .eq-visualizer.show-bg {
       display: block;
-      z-index: -1;     /* same plane as .art-bg */
-      opacity: 0.4;    /* subordinate to content readability */
+      z-index: 0;
+      opacity: 1;
+      background: #0a0a0c;
+    }
+    .eq-visualizer:not(.eq-mode-bars) .eq-slot { display: none !important; }
+    .eq-slot {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      contain: layout paint style;
+      display: none;
+    }
+    .eq-bar,
+    .eq-reflect,
+    .eq-peak {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      pointer-events: none;
+      will-change: transform;
+    }
+    .eq-bar {
+      transform-origin: bottom center;
+      transition: transform 75ms linear, background 120ms linear;
+    }
+    .eq-reflect {
+      transform-origin: top center;
+      transition: transform 75ms linear, background 120ms linear;
+    }
+    .eq-peak {
+      height: 2px;
+      transition: transform 95ms linear, background 120ms linear, opacity 120ms linear;
+    }
+    .eq-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+      overflow: visible;
+      pointer-events: none;
+      contain: layout paint style;
+    }
+    .eq-visualizer.eq-mode-radial .eq-svg,
+    .eq-visualizer.eq-mode-tunnel .eq-svg { display: block; }
+    .eq-svg line,
+    .eq-svg polygon,
+    .eq-svg circle {
+      vector-effect: non-scaling-stroke;
+      will-change: transform, opacity;
     }
     /* When EQ is the background, hide the blurred-cover bg layer always
        (they'd fight for the same pixels). The foreground cover defaults
        to hidden too — atmosphere mode replaces the cover entirely — but
        the eqShowAlbumArt option flips that off and brings the cover back
        so it sits alongside the bars.
-       The cover stays at full opacity; drawEqBars carves a vertical
-       notch in the spectrum so bars don't draw behind the cover (see
-       artLeft/artRight handling in drawEqBars). */
+       The cover stays at full opacity; bar mode moves over to avoid the
+       cover, while radial/tunnel sit behind it as ambient light. */
     .root.eq-as-bg .art-bg { display: none; }
     .root.eq-as-bg:not(.eq-show-art) .art { display: none; }
+    .root.eq-as-bg .art,
+    .root.eq-as-bg .content,
+    .root.eq-as-bg .horizon {
+      position: relative;
+      z-index: 1;
+    }
 
     /* Horizon line — a thin themed accent line that sits just below the
        header (under the Spotify source chip). The equalizer bars peak
@@ -695,8 +788,8 @@
        as a fixed visual reference AND as the "ceiling" for the
        spectrum. Always shown when EQ visible / lyrics-or-queue modes,
        only hidden in listening-equalizer (where content is gone).
-       Z-index 0 (default) keeps it above the bg canvas but behind the
-       full-screen canvas, which is appropriate. */
+       Z-index 0 (default) keeps it above the bg visualizer but behind the
+       full-screen visualizer, which is appropriate. */
     .horizon {
       flex: 0 0 auto;
       height: 1px;
@@ -916,10 +1009,10 @@
          open so the request succeeds either way. -->
     <img class="art-bg" id="artBg" alt="" aria-hidden="true" crossorigin="anonymous">
     <!-- Spectrum visualizer. SSE stream from /api/audio/spectrum/stream
-         feeds the bar values; requestAnimationFrame redraws at ~60Hz.
-         Hidden by default — only painted when listeningView=Equalizer is
-         active in listening mode, or the eqBackground option is on. -->
-    <canvas class="eq-canvas" id="eqCanvas" aria-hidden="true"></canvas>
+         feeds DOM bars directly. Hidden by default — only updated when
+         listeningView=Equalizer is active in listening mode, or the
+         eqBackground option is on. -->
+    <div class="eq-visualizer" id="eqVisualizer" aria-hidden="true"></div>
     <img class="art empty" id="art" alt="" crossorigin="anonymous">
     <div class="content">
       <div class="header-row">
@@ -1042,6 +1135,7 @@
       listeningView: 0,
       eqBackground: false,
       eqShowAlbumArt: false,
+      eqVisualizerMode: 0,
       theme: 0,
     });
     const settings = { ...SETTING_DEFAULTS };
@@ -1131,6 +1225,8 @@
     let lastUpnextText = '';
     let queueTimer = null;
     let playlistsTimer = null;
+    let spotifyQueueInFlight = false;
+    let spotifyPlaylistsInFlight = false;
 
     // View state for the content area: 'lyrics' (default — lyrics if
     // available, queue auto-fallback otherwise), 'queue' (user explicitly
@@ -1164,7 +1260,7 @@
 
     // Equalizer-as-background option. Independent of listening mode —
     // when on, the .art-bg blurred-cover layer is swapped for the EQ
-    // canvas behind the content. Stacks with listening-equalizer if both
+    // visualizer behind the content. Stacks with listening-equalizer if both
     // are active (the full-screen overlay takes precedence visually).
     let optEqBackground = false;
     // Aspect-ratio threshold separating wide-strip from square/tall.
@@ -1227,6 +1323,7 @@
     let lastSourceAlbum = null;       // string we last wrote to .album
     let lastLibMode = null;           // 'connect' | 'playlists'
     let pulseTimeout = null;
+    let eqLayoutCache = null;
 
     let anchorPosMs = 0;
     let anchorAt = 0;
@@ -1259,6 +1356,7 @@
       lastIsWide = isWide;
       rootEl.classList.toggle('size-wide', isWide);
       rootEl.classList.toggle('size-vertical', !isWide);
+      invalidateEqLayoutCache();
       // After a layout swap, the lyrics viewport height changes — re-apply
       // the current line's translateY so it stays centered.
       if (lyricsTrackEl && currentLineIdx >= 0 && lyricLineEls[currentLineIdx]) {
@@ -1280,8 +1378,8 @@
       for (const entry of entries) {
         applyLayout(entry.contentRect.width, entry.contentRect.height);
       }
-      // Keep the EQ canvas backing-store in sync with the visible size.
-      // No-op when the canvas is hidden (eqResize is cheap either way).
+      // Keep the EQ visualizer geometry in sync with the visible size.
+      // No-op when the visualizer is hidden (eqResize is cheap either way).
       eqResize();
     }).observe(rootEl);
     applyLayout(rootEl.clientWidth, rootEl.clientHeight);
@@ -1298,12 +1396,14 @@
         // decoded bitmap once, both <img>s share it — no extra fetch.
         artBgEl.src = url;
         lastArtVersion = version;
+        invalidateEqLayoutCache();
       }
       if (hasArt !== lastHasArt) {
         artEl.classList.toggle('empty', !hasArt);
         lastHasArt = hasArt;
         // Show/hide the bg layer in lockstep with the foreground art.
         artBgEl.classList.toggle('show', hasArt);
+        invalidateEqLayoutCache();
       }
     }
 
@@ -1453,6 +1553,8 @@
         if (listVisible()) applyView();
         return;
       }
+      if (spotifyQueueInFlight) return;
+      spotifyQueueInFlight = true;
       try {
         const r = await fetch(HOST + '/api/spotify/queue');
         if (!r.ok) return;
@@ -1471,6 +1573,7 @@
         // round-trip (which can take 100ms-4s in our logs).
         prefetchLyricsForQueue();
       } catch { /* non-fatal */ }
+      finally { spotifyQueueInFlight = false; }
     }
 
     async function pollSpotifyPlaylists() {
@@ -1479,6 +1582,8 @@
         if (currentView === 'playlists') applyView();
         return;
       }
+      if (spotifyPlaylistsInFlight) return;
+      spotifyPlaylistsInFlight = true;
       try {
         const r = await fetch(HOST + '/api/spotify/playlists');
         if (!r.ok) return;
@@ -1488,6 +1593,7 @@
         // it's stored ready for whenever the user taps the lib button.
         if (currentView === 'playlists') applyView();
       } catch { /* non-fatal */ }
+      finally { spotifyPlaylistsInFlight = false; }
     }
 
     // --- View state machine ---------------------------------------------
@@ -1566,30 +1672,103 @@
     }
 
     function setView(view) {
+      const prev = currentView;
       currentView = view;
       // Prime the relevant data so the list isn't blank on first open.
       if (view === 'playlists') pollSpotifyPlaylists();
       if (view === 'queue') pollSpotifyQueue();
       if (view === 'audio-source') loadAudioSources();
+      // Settings view: reset to the General tab on fresh entry. When
+      // backing out of audio-source (where the user came from the
+      // Equalizer tab), land them back on Equalizer instead.
+      if (view === 'settings') {
+        settingsActiveTab = prev === 'audio-source' ? 'equalizer' : 'general';
+      }
       applyView();
     }
 
     // --- Equalizer (WASAPI loopback spectrum) ---------------------------
     // The host runs a continuous WASAPI loopback capture, FFTs the buffer
-    // into 64 log-spaced bins, and pushes a snapshot at ~30Hz over SSE.
-    // We draw on requestAnimationFrame at the display refresh rate so the
-    // bars feel native even when SSE delivery jitters. EventSource handles
-    // reconnect automatically; we open/close it based on whether anything
-    // visually needs the spectrum (listening-equalizer or eqBackground).
+    // into 64 log-spaced bins, and pushes snapshots at ~60Hz over SSE.
+    // The visualizer renders as normal DOM bars instead of a canvas: iCUE's
+    // QtWebEngine was flashing whenever the canvas renderer was active.
 
-    const eqCanvas = document.getElementById('eqCanvas');
-    const eqCtx = eqCanvas.getContext('2d', { alpha: true });
+    const eqVisualizer = document.getElementById('eqVisualizer');
     const EQ_BINS = 64;
+    const EQ_BAR_COUNT = 64;
+    const EQ_RADIAL_COUNT = 128;
+    const EQ_TUNNEL_RINGS = 18;
+    const EQ_TUNNEL_SIDES = 8;
     let eqSpectrum = new Float32Array(EQ_BINS);
-    const eqPeaks = new Float32Array(EQ_BINS);
+    const eqPeaks = new Float32Array(EQ_BAR_COUNT);
+    const eqBars = [];
+    for (let i = 0; i < EQ_BAR_COUNT; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'eq-slot';
+      const bar = document.createElement('div');
+      bar.className = 'eq-bar';
+      const reflect = document.createElement('div');
+      reflect.className = 'eq-reflect';
+      const peak = document.createElement('div');
+      peak.className = 'eq-peak';
+      slot.appendChild(bar);
+      slot.appendChild(reflect);
+      slot.appendChild(peak);
+      eqVisualizer.appendChild(slot);
+      eqBars.push({ slot, bar, reflect, peak });
+    }
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const eqSvg = document.createElementNS(SVG_NS, 'svg');
+    eqSvg.classList.add('eq-svg');
+    eqSvg.setAttribute('aria-hidden', 'true');
+    eqSvg.setAttribute('focusable', 'false');
+
+    const eqRadialLayer = document.createElementNS(SVG_NS, 'g');
+    const eqRadialLines = [];
+    for (let i = 0; i < EQ_RADIAL_COUNT; i++) {
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('stroke-linecap', 'round');
+      eqRadialLayer.appendChild(line);
+      eqRadialLines.push(line);
+    }
+    const eqRadialCore = document.createElementNS(SVG_NS, 'circle');
+    eqRadialLayer.appendChild(eqRadialCore);
+
+    const eqTunnelLayer = document.createElementNS(SVG_NS, 'g');
+    const eqTunnelRings = [];
+    for (let i = 0; i < EQ_TUNNEL_RINGS; i++) {
+      const poly = document.createElementNS(SVG_NS, 'polygon');
+      poly.setAttribute('fill', 'none');
+      poly.setAttribute('stroke-linejoin', 'round');
+      eqTunnelLayer.appendChild(poly);
+      eqTunnelRings.push(poly);
+    }
+    const eqTunnelSpokes = [];
+    for (let i = 0; i < EQ_TUNNEL_SIDES; i++) {
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('stroke-linecap', 'round');
+      eqTunnelLayer.appendChild(line);
+      eqTunnelSpokes.push(line);
+    }
+    eqSvg.appendChild(eqRadialLayer);
+    eqSvg.appendChild(eqTunnelLayer);
+    eqVisualizer.appendChild(eqSvg);
+
     let eqStream = null;
-    let eqRAF = 0;
-    let eqDpr = 1;
+    let eqLastRenderAt = 0;
+    let eqCssW = 0;
+    let eqCssH = 0;
+    let eqBass = 0;
+    let eqMid = 0;
+    let eqTreble = 0;
+    let eqBeatHold = 0;
+    const eqBinOffsets = new Int8Array(EQ_BAR_COUNT);
+    for (let i = 0; i < EQ_BAR_COUNT; i++) {
+      const center = (EQ_BAR_COUNT - 1) / 2;
+      const side = i < center ? -1 : 1;
+      const jitter = ((i * 17 + 13) % 5) - 2;
+      eqBinOffsets[i] = side * (1 + ((i * 7) % 3)) + jitter;
+    }
 
     // Bar color. Two stops — bright top, darker bottom of the same hue —
     // give the bars depth without needing per-album palette engineering.
@@ -1608,6 +1787,7 @@
     // .theme-* class on rootEl. Tied to the `theme` iCUE option.
     let optTheme = 0;
     let optEqShowAlbumArt = false;
+    let optEqVisualizerMode = 0;
     // List of theme class names (1-indexed in optTheme). Index 0 is null
     // because the album theme doesn't use a class — its accent values
     // are set inline by JS so they track the current cover.
@@ -1666,20 +1846,34 @@
     // as both palette dispatch and CSS theme class application.)
 
     // --- Settings UI schema ----------------------------------------------
-    // Renders the in-widget Settings view. Each entry describes one
-    // setting's UI: how to label it, what kind of control to draw, what
-    // values it accepts. The actual value lives in `settings[key]`; the
-    // handler runs when the user changes it via the rendered control.
-    const SETTING_SECTIONS = [
+    // Tabbed panel: General / Listening / Equalizer. Only the items in
+    // the active tab render in the body. Each tab has an icon SVG body
+    // (inserted into a <svg viewBox="0 0 24 24"> wrapper at render
+    // time) plus an items array. Audio source lives at the bottom of
+    // the Equalizer tab via a special 'audio-source-link' item type
+    // — clicking it switches to the audio-source sub-view.
+    const SETTING_TABS = [
       {
-        title: 'General',
+        id: 'general',
+        label: 'General',
+        icon: '<circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/>'
+          + '<g stroke="currentColor" stroke-width="2" stroke-linecap="round">'
+          + '<line x1="12" y1="3" x2="12" y2="5.5"/>'
+          + '<line x1="12" y1="18.5" x2="12" y2="21"/>'
+          + '<line x1="3" y1="12" x2="5.5" y2="12"/>'
+          + '<line x1="18.5" y1="12" x2="21" y2="12"/>'
+          + '<line x1="5.5" y1="5.5" x2="7.3" y2="7.3"/>'
+          + '<line x1="16.7" y1="16.7" x2="18.5" y2="18.5"/>'
+          + '<line x1="18.5" y1="5.5" x2="16.7" y2="7.3"/>'
+          + '<line x1="7.3" y1="16.7" x2="5.5" y2="18.5"/>'
+          + '</g>',
         items: [
           { key: 'showLyrics', type: 'switch',
             label: 'Show lyrics',
             sub: 'Show synced lyrics when available' },
           { key: 'lyricSyncOffsetMs', type: 'slider',
             label: 'Lyric sync offset',
-            min: -2000, max: 2000, step: 50, unit: 'ms' },
+            min: -2000, max: 2000, step: 50, unit: 'ms', signed: true },
           { key: 'pollIntervalMs', type: 'slider',
             label: 'Poll interval',
             sub: 'How often the widget refreshes',
@@ -1687,7 +1881,11 @@
         ],
       },
       {
-        title: 'Listening View',
+        id: 'listening',
+        label: 'Listening',
+        icon: '<path d="M4 14v-2a8 8 0 0 1 16 0v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+          + '<rect x="3" y="14" width="4" height="6" rx="1.5" fill="currentColor"/>'
+          + '<rect x="17" y="14" width="4" height="6" rx="1.5" fill="currentColor"/>',
         items: [
           { key: 'autoExpand', type: 'switch',
             label: 'Auto-expand when idle',
@@ -1705,13 +1903,24 @@
         ],
       },
       {
-        title: 'Equalizer',
+        id: 'equalizer',
+        label: 'Equalizer',
+        icon: '<rect x="4" y="9" width="3" height="11" rx="1" fill="currentColor"/>'
+          + '<rect x="10.5" y="4" width="3" height="16" rx="1" fill="currentColor"/>'
+          + '<rect x="17" y="12" width="3" height="8" rx="1" fill="currentColor"/>',
         items: [
           { key: 'eqBackground', type: 'switch',
             label: 'Use as background',
             sub: 'Show spectrum behind lyrics' },
           { key: 'eqShowAlbumArt', type: 'switch',
             label: 'Show album art alongside' },
+          { key: 'eqVisualizerMode', type: 'segment',
+            label: 'Visualizer',
+            options: [
+              { value: 0, label: 'Bars' },
+              { value: 1, label: 'Radial' },
+              { value: 2, label: 'Tunnel' },
+            ] },
           { key: 'theme', type: 'segment',
             label: 'Theme',
             options: [
@@ -1722,9 +1931,15 @@
               { value: 4, label: 'Aurora' },
               { value: 5, label: 'Mono' },
             ] },
+          { type: 'audio-source-link' },
         ],
       },
     ];
+
+    // Which tab is showing in the settings panel. Resets to 'general'
+    // each time the settings view is opened — predictable starting
+    // point beats "wherever you left off".
+    let settingsActiveTab = 'general';
 
     // --- Color helpers (RGB ↔ HSL) -------------------------------------
     // We extract a dominant RGB from the cover, then go via HSL so we can
@@ -1854,18 +2069,39 @@
       deriveEqColors(rgb);
     }
 
+    function invalidateEqLayoutCache() {
+      eqLayoutCache = null;
+    }
+
     function eqResize() {
-      const rect = eqCanvas.getBoundingClientRect();
-      eqDpr = window.devicePixelRatio || 1;
-      const w = Math.max(1, Math.round(rect.width * eqDpr));
-      const h = Math.max(1, Math.round(rect.height * eqDpr));
-      if (eqCanvas.width !== w) eqCanvas.width = w;
-      if (eqCanvas.height !== h) eqCanvas.height = h;
-      eqCtx.setTransform(eqDpr, 0, 0, eqDpr, 0, 0);
+      const rect = eqVisualizer.getBoundingClientRect();
+      eqCssW = rect.width;
+      eqCssH = rect.height;
+      invalidateEqLayoutCache();
     }
 
     function eqWanted() {
       return (listeningMode && optListeningView === 2) || optEqBackground;
+    }
+
+    function eqRgba(c, a) {
+      return `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+    }
+
+    function eqPaletteColor(t, time) {
+      const paletteName = THEME_NAMES[optTheme];
+      const paletteFn = paletteName ? PRESET_PALETTES[paletteName] : null;
+      if (!paletteFn) return eqColorTop;
+      const wrapped = ((t % 1) + 1) % 1;
+      return paletteFn(wrapped, time);
+    }
+
+    function applyEqMode() {
+      eqVisualizer.classList.toggle('eq-mode-bars', optEqVisualizerMode === 0);
+      eqVisualizer.classList.toggle('eq-mode-radial', optEqVisualizerMode === 1);
+      eqVisualizer.classList.toggle('eq-mode-tunnel', optEqVisualizerMode === 2);
+      eqRadialLayer.style.display = optEqVisualizerMode === 1 ? '' : 'none';
+      eqTunnelLayer.style.display = optEqVisualizerMode === 2 ? '' : 'none';
     }
 
     // Apply the user's selected theme to the root element. Drives every
@@ -1909,26 +2145,21 @@
     function applyEqVisibility() {
       const wantsFull = listeningMode && optListeningView === 2;
       const wantsBg = optEqBackground && !wantsFull;
-      eqCanvas.classList.toggle('show-full', wantsFull);
-      eqCanvas.classList.toggle('show-bg', wantsBg);
+      eqVisualizer.classList.toggle('show-full', wantsFull);
+      eqVisualizer.classList.toggle('show-bg', wantsBg);
       rootEl.classList.toggle('eq-as-bg', wantsBg);
       // Album-art-alongside-eq option. Only meaningful when eq is the
       // background; in listening-equalizer mode (full submode) the CSS
       // hides the cover regardless.
       rootEl.classList.toggle('eq-show-art', wantsBg && optEqShowAlbumArt);
+      invalidateEqLayoutCache();
+      applyEqMode();
       if (wantsFull || wantsBg) {
         eqResize();
         ensureEqStream();
-        ensureEqRAF();
+        renderEqFrame(1 / 60);
       } else {
-        stopEqRAF();
         stopEqStream();
-        // Clear the canvas so a stale frame doesn't flash if it becomes
-        // visible again before the next paint.
-        const rect = eqCanvas.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          eqCtx.clearRect(0, 0, rect.width, rect.height);
-        }
       }
     }
 
@@ -1947,6 +2178,20 @@
             const n = Math.min(EQ_BINS, data.bins.length);
             for (let i = 0; i < n; i++) eqSpectrum[i] = data.bins[i];
           }
+          eqBass = typeof data.bass === 'number' ? data.bass : 0;
+          eqMid = typeof data.mid === 'number' ? data.mid : 0;
+          eqTreble = typeof data.treble === 'number' ? data.treble : 0;
+          if (!eqWanted()) return;
+          const now = performance.now();
+          const icueFps = window.iCUE ? Number(window.iCUE.fpsLimit) : NaN;
+          const fps = Number.isFinite(icueFps) && icueFps > 0
+            ? Math.max(15, Math.min(60, icueFps))
+            : 60;
+          const intervalMs = 1000 / fps;
+          if (eqLastRenderAt && now - eqLastRenderAt < intervalMs * 0.75) return;
+          const dt = eqLastRenderAt ? Math.min(0.12, Math.max(0.001, (now - eqLastRenderAt) / 1000)) : intervalMs / 1000;
+          renderEqFrame(dt);
+          eqLastRenderAt = now;
         } catch { /* drop bad frame */ }
       };
       // EventSource auto-reconnects on transient drops; nothing to do
@@ -1961,139 +2206,137 @@
       // Decay the bars to zero so they don't freeze mid-pulse on close.
       for (let i = 0; i < EQ_BINS; i++) {
         eqSpectrum[i] = 0;
-        eqPeaks[i] = 0;
       }
+      eqBass = 0;
+      eqMid = 0;
+      eqTreble = 0;
+      eqBeatHold = 0;
+      for (let i = 0; i < EQ_BAR_COUNT; i++) {
+        eqPeaks[i] = 0;
+        const parts = eqBars[i];
+        parts.bar.style.transform = 'scaleY(0)';
+        parts.reflect.style.transform = 'scaleY(0)';
+        parts.peak.style.opacity = '0';
+      }
+      for (const line of eqRadialLines) line.style.opacity = '0';
+      eqRadialCore.style.opacity = '0';
+      for (const poly of eqTunnelRings) poly.style.opacity = '0';
+      for (const line of eqTunnelSpokes) line.style.opacity = '0';
+      eqLastRenderAt = 0;
     }
 
-    function ensureEqRAF() {
-      if (eqRAF) return;
-      const tick = () => {
-        if (!eqWanted()) { eqRAF = 0; return; }
-        drawEqBars();
-        eqRAF = requestAnimationFrame(tick);
-      };
-      eqRAF = requestAnimationFrame(tick);
-    }
-    function stopEqRAF() {
-      if (eqRAF) {
-        cancelAnimationFrame(eqRAF);
-        eqRAF = 0;
-      }
+    function renderEqFrame(dt) {
+      eqBeatHold = Math.max(Math.max(0, eqBeatHold - dt * 1.9), eqBass);
+      if (optEqVisualizerMode === 1) renderEqRadial(dt);
+      else if (optEqVisualizerMode === 2) renderEqTunnel(dt);
+      else renderEqBars(dt);
     }
 
     // Spectrum bars — atmosphere-style layout.
     //
-    // Bars grow UP from a centered baseline (h*0.5), capped at ~42% of
-    // canvas height so peaks leave a buffer below the title row at the
-    // top. Below the baseline, a reflection extends DOWN — it holds full
-    // opacity for the first half of its length, then fades to transparent
-    // over the second half. The result is bars "floating in atmosphere"
-    // with a reflection that bleeds into / behind the lyric area instead
-    // of staying confined to a thin strip below.
+    // Bars grow UP from a centered baseline (h*0.5), mirrored around the
+    // center so the loudest low/mid energy becomes the visual focus and
+    // higher frequencies fan out toward the edges. Below the baseline, a
+    // reflection extends DOWN and fades out.
     //
     // Two-tone gradient per bar: bright at top, darker bottom. The hue
     // is derived from the current album cover (see deriveEqColors); a
     // mid-cover change snaps the palette to the new album.
     //
-    // Mode differentiator: opacity only (controlled by CSS — .show-full
-    // = 1.0, .show-bg = 0.4). Geometry is identical so the visualizer
-    // feels like the same object whether it's the screensaver or sitting
-    // behind the content.
-    function drawEqBars() {
-      const rect = eqCanvas.getBoundingClientRect();
-      const w = rect.width;
-      const h = rect.height;
+    // Layout is cached so the spectrum stream can update bar transforms
+    // without forcing art/horizon geometry reads every frame.
+    function renderEqBars(dt) {
+      if (eqCssW <= 0 || eqCssH <= 0) eqResize();
+      const w = eqCssW;
+      const h = eqCssH;
       if (w <= 0 || h <= 0) return;
-      if ((window.devicePixelRatio || 1) !== eqDpr) eqResize();
 
-      // Soft trail — semi-transparent wipe so the bars leave a faint
-      // motion blur. The fade has to be visible against fully-transparent
-      // initial canvas in bg mode, so we clear-and-add rather than
-      // depending on the page background showing through.
-      eqCtx.fillStyle = 'rgba(10, 10, 12, 0.40)';
-      eqCtx.fillRect(0, 0, w, h);
-
-      // Baseline at the vertical center. Bars grow up from here. maxH
-      // caps the bar height so peaks land exactly on the horizon line
-      // (a themed accent line rendered just under the source chip).
-      // We read the horizon's real Y via getBoundingClientRect so the
-      // peaks track its position regardless of layout (size-wide vs
-      // size-vertical changes where the horizon ends up).
-      const baseY = h * 0.50;
-      let maxH = h * 0.42;
-      const horizonEl = document.getElementById('horizon');
-      if (horizonEl) {
-        const hr = horizonEl.getBoundingClientRect();
-        const cr = eqCanvas.getBoundingClientRect();
-        if (hr.height >= 0 && hr.width > 0) {
-          const horizonY = hr.top - cr.top + hr.height / 2;
-          // Clamp: don't let maxH go absurd if the horizon is below
-          // the baseline (would invert) or so close that bars are
-          // invisible.
-          const candidate = baseY - horizonY;
-          if (candidate > h * 0.10) maxH = Math.min(maxH, candidate);
-        }
-      }
-      // Reflection length: same as the bar, so a tall bar has a tall
-      // reflection (proportional, looks more like real water reflection).
-      // Reflection is the "ghost" mirror below each bar. We want it in
-      // the background mode (lyrics float over it, gives depth), but
-      // NOT in full-screen mode — there it just reads as random
-      // duplicate bars cluttering an otherwise clean screensaver.
-      const isFullMode = eqCanvas.classList.contains('show-full');
-      const reflectFactor = isFullMode ? 0 : 1.0;
-
+      const isFullMode = eqVisualizer.classList.contains('show-full');
+      const wantsArtLayout = rootEl.classList.contains('eq-as-bg')
+          && rootEl.classList.contains('eq-show-art');
+      const isWide = rootEl.classList.contains('size-wide');
+      const bgAlpha = isFullMode ? 1 : 0.42;
       const pad = w * 0.04;
 
-      // Default drawing region: full canvas width minus padding.
-      let startX = pad;
-      let availableW = w - pad * 2;
-      let drawBaseY = baseY;     // may shift down if art is at top
-      let drawMaxH = maxH;       // may shrink to fit reflection
-
-      // If the album cover is visible alongside the bars, push the
-      // drawing region out of the cover's area. The user wants the
-      // spectrum to MOVE OVER, not be carved out — losing the high-end
-      // bins is acceptable (their words: "we can just lose a few
-      // frequencies"). Approach:
-      //   size-wide   — art sits on the left; push startX right of art
-      //                 and shrink the visible bar count so each bar
-      //                 keeps its original width (no scrunching).
-      //   size-vertical — art sits at top-center; push the baseline
-      //                 down so bars don't overlap the cover. Bar count
-      //                 stays at EQ_BINS, but the bars and their
-      //                 reflection get vertically scaled to fit.
-      let numBars = EQ_BINS;
-      if (rootEl.classList.contains('eq-as-bg')
-          && rootEl.classList.contains('eq-show-art')) {
-        const ar = artEl.getBoundingClientRect();
-        const cr = eqCanvas.getBoundingClientRect();
-        if (ar.width > 0 && ar.height > 0) {
-          const edge = 10;
-          if (rootEl.classList.contains('size-wide')) {
-            const artRightLocal = (ar.right - cr.left) + edge;
-            const stdSlot = (w - pad * 2) / EQ_BINS;
-            startX = Math.max(pad, artRightLocal);
-            availableW = Math.max(stdSlot * 4, w - pad - startX);
-            numBars = Math.max(8, Math.floor(availableW / stdSlot));
-          } else {
-            const artBottomLocal = (ar.bottom - cr.top) + edge;
-            // Pick the smallest maxH where bars clear the cover AND
-            // the reflection fits within the canvas:
-            //   drawBaseY - drawMaxH > artBottomLocal
-            //   drawBaseY + drawMaxH < h
-            // Setting drawMaxH = min((h - artBottomLocal)/2 - small,
-            // original maxH) works.
-            const cap = Math.max(40, (h - artBottomLocal - 12) / 2);
-            drawMaxH = Math.min(maxH, cap);
-            drawBaseY = artBottomLocal + drawMaxH;
-            if (drawBaseY < h * 0.5) drawBaseY = h * 0.5;
+      if (!eqLayoutCache
+          || eqLayoutCache.w !== w
+          || eqLayoutCache.h !== h
+          || eqLayoutCache.isFullMode !== isFullMode
+          || eqLayoutCache.wantsArtLayout !== wantsArtLayout
+          || eqLayoutCache.isWide !== isWide) {
+        // Baseline at the vertical center. Bars grow up from here. In
+        // background mode, cache the horizon/art geometry so the animation
+        // loop can paint without forcing layout every frame.
+        const baseY = h * 0.50;
+        let maxH = h * 0.42;
+        const cr = eqVisualizer.getBoundingClientRect();
+        const horizonEl = document.getElementById('horizon');
+        if (!isFullMode && horizonEl) {
+          const hr = horizonEl.getBoundingClientRect();
+          if (hr.height >= 0 && hr.width > 0) {
+            const horizonY = hr.top - cr.top + hr.height / 2;
+            const candidate = baseY - horizonY;
+            if (candidate > h * 0.10) maxH = Math.min(maxH, candidate);
           }
+        }
+
+        let startX = pad;
+        let availableW = w - pad * 2;
+        let drawBaseY = baseY;
+        let drawMaxH = maxH;
+        let numBars = EQ_BINS;
+
+        if (wantsArtLayout) {
+          const ar = artEl.getBoundingClientRect();
+          if (ar.width > 0 && ar.height > 0) {
+            const edge = 10;
+            if (isWide) {
+              const artRightLocal = (ar.right - cr.left) + edge;
+              const stdSlot = (w - pad * 2) / EQ_BINS;
+              startX = Math.max(pad, artRightLocal);
+              availableW = Math.max(stdSlot * 4, w - pad - startX);
+              numBars = Math.max(8, Math.floor(availableW / stdSlot));
+            } else {
+              const artBottomLocal = (ar.bottom - cr.top) + edge;
+              const cap = Math.max(40, (h - artBottomLocal - 12) / 2);
+              drawMaxH = Math.min(maxH, cap);
+              drawBaseY = artBottomLocal + drawMaxH;
+              if (drawBaseY < h * 0.5) drawBaseY = h * 0.5;
+            }
+          }
+        }
+
+        eqLayoutCache = {
+          w, h, isFullMode, wantsArtLayout, isWide,
+          startX, availableW, drawBaseY, drawMaxH,
+          numBars,
+          reflectFactor: 1.0,
+        };
+
+        for (let i = 0; i < EQ_BAR_COUNT; i++) {
+          const parts = eqBars[i];
+          if (i >= numBars) {
+            parts.slot.style.display = 'none';
+            continue;
+          }
+          const slot = availableW / numBars;
+          const barW = slot * 0.72;
+          const x = startX + i * slot + (slot - barW) / 2;
+          parts.slot.style.display = 'block';
+          parts.slot.style.left = x.toFixed(2) + 'px';
+          parts.slot.style.width = barW.toFixed(2) + 'px';
+          parts.bar.style.bottom = (h - drawBaseY).toFixed(2) + 'px';
+          parts.bar.style.height = drawMaxH.toFixed(2) + 'px';
+          parts.reflect.style.top = drawBaseY.toFixed(2) + 'px';
+          parts.reflect.style.height = (drawMaxH * 1.0).toFixed(2) + 'px';
+          parts.peak.style.top = '0';
         }
       }
 
-      const slot = availableW / numBars;
-      const barW = slot * 0.72;
+      const drawBaseY = eqLayoutCache.drawBaseY;
+      const drawMaxH = eqLayoutCache.drawMaxH;
+      const numBars = eqLayoutCache.numBars;
+      const reflectFactor = eqLayoutCache.reflectFactor;
 
       // Decide the per-bar color source. Album-derived (palette 0) reuses
       // the same (top, bottom) pair for every bar — clean, atmospheric,
@@ -2107,19 +2350,27 @@
       const rgba = (c, a) => `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
 
       for (let i = 0; i < numBars; i++) {
-        // Visible bar i → which spectrum bin does it show? When numBars
-        // < EQ_BINS we subsample evenly so the full frequency range is
-        // still represented, just at lower resolution.
-        const binIdx = numBars === EQ_BINS ? i : Math.floor(i * EQ_BINS / numBars);
-        const v = eqSpectrum[binIdx];
+        // Center-weighted, not perfectly mirrored: bass/low-mid lives near
+        // the middle, treble fans outward, and each side samples neighboring
+        // bins slightly differently so paired bars feel related but not cloned.
+        const center = (numBars - 1) / 2;
+        const dist = center > 0 ? Math.abs(i - center) / center : 0;
+        const baseBin = Math.round(Math.pow(dist, 1.35) * (EQ_BINS - 1));
+        const side = i < center ? -1 : 1;
+        const binIdx = Math.max(0, Math.min(EQ_BINS - 1, baseBin + eqBinOffsets[i]));
+        const neighborIdx = Math.max(0, Math.min(EQ_BINS - 1, binIdx + side * ((((i * 11) % 3) - 1))));
+        const centerLift = 0.38 + 0.62 * Math.pow(1 - dist, 0.55);
+        const v = (eqSpectrum[binIdx] * 0.78 + eqSpectrum[neighborIdx] * 0.22) * centerLift;
         const bh = Math.min(drawMaxH, v * drawMaxH);
-        eqPeaks[binIdx] = Math.max(eqPeaks[binIdx] - 0.6, bh);
-        const x = startX + i * slot + (slot - barW) / 2;
+        const peakDrop = drawMaxH * (isFullMode ? 0.95 : 0.7) * dt;
+        eqPeaks[i] = Math.max(eqPeaks[i] - peakDrop, bh);
+        const scale = drawMaxH > 0 ? Math.max(0, Math.min(1, bh / drawMaxH)) : 0;
+        const parts = eqBars[i];
 
         // Resolve top + bottom colors for THIS bar.
         let ct, cb;
         if (paletteFn) {
-          ct = paletteFn(i / EQ_BINS, elapsed);
+          ct = paletteFn(i / Math.max(1, numBars - 1), elapsed);
           // Bottom = same color darkened to 40%. Keeps the per-bar hue
           // identity while still giving each bar the two-tone gradient.
           cb = [ct[0] * 0.4, ct[1] * 0.4, ct[2] * 0.4];
@@ -2129,35 +2380,129 @@
         }
 
         // Main bar: bright top → darker bottom (two-tone).
-        const grad = eqCtx.createLinearGradient(0, drawBaseY - bh, 0, drawBaseY);
-        grad.addColorStop(0, rgba(ct, 1));
-        grad.addColorStop(0.6, rgba(ct, 0.92));
-        grad.addColorStop(1, rgba(cb, 0.55));
-        eqCtx.fillStyle = grad;
-        eqCtx.fillRect(x, drawBaseY - bh, barW, bh);
+        parts.bar.style.background =
+          `linear-gradient(to top, ${rgba(cb, 0.55 * bgAlpha)} 0%, ${rgba(ct, 0.92 * bgAlpha)} 60%, ${rgba(ct, bgAlpha)} 100%)`;
+        parts.bar.style.transform = `scaleY(${scale.toFixed(4)})`;
 
-        // Reflection below baseline.
-        // - First 50% of reflection: hold near-full mirror opacity
-        // - Second 50%: fade linearly to transparent
-        // User request: "halfway it starts fading out slowly".
+        // Reflection below baseline: visible in both full EQ and background
+        // EQ, with no trailing frame ghosts. Falling peak caps are drawn
+        // separately so they decay cleanly without smearing the whole frame.
         const reflH = bh * reflectFactor;
-        if (reflH > 1) {
-          const g2 = eqCtx.createLinearGradient(0, drawBaseY, 0, drawBaseY + reflH);
-          g2.addColorStop(0, rgba(cb, 0.55));
-          g2.addColorStop(0.5, rgba(cb, 0.5));   // halfway — still vivid
-          g2.addColorStop(1, rgba(cb, 0));        // bottom — fully faded
-          eqCtx.fillStyle = g2;
-          eqCtx.fillRect(x, drawBaseY, barW, reflH);
-        }
+        const reflectScale = drawMaxH > 0 ? Math.max(0, Math.min(1, reflH / drawMaxH)) : 0;
+        parts.reflect.style.background =
+          `linear-gradient(to bottom, ${rgba(cb, (isFullMode ? 0.38 : 0.55) * bgAlpha)} 0%, ${rgba(cb, (isFullMode ? 0.28 : 0.5) * bgAlpha)} 50%, ${rgba(cb, 0)} 100%)`;
+        parts.reflect.style.transform = `scaleY(${reflectScale.toFixed(4)})`;
 
-        // Peak cap — thin line that decays toward the bar top.
-        eqCtx.fillStyle = rgba(ct, 0.95);
-        eqCtx.fillRect(x, drawBaseY - eqPeaks[binIdx] - 3, barW, 2);
+        if (eqPeaks[i] > 2) {
+          parts.peak.style.background = rgba(ct, (isFullMode ? 0.92 : 0.72) * bgAlpha);
+          parts.peak.style.transform = `translateY(${(drawBaseY - eqPeaks[i] - 3).toFixed(2)}px)`;
+          parts.peak.style.opacity = '1';
+        } else {
+          parts.peak.style.opacity = '0';
+        }
       }
     }
 
-    // Re-resize the canvas + redraw whenever the root cell does.
-    // ResizeObserver on rootEl already fires applyLayout; canvas tracks
+    function renderEqRadial(dt) {
+      if (eqCssW <= 0 || eqCssH <= 0) eqResize();
+      const w = eqCssW;
+      const h = eqCssH;
+      if (w <= 0 || h <= 0) return;
+
+      const isFullMode = eqVisualizer.classList.contains('show-full');
+      const elapsed = performance.now() / 1000;
+      const cx = w / 2;
+      const cy = h / 2;
+      const minSide = Math.min(w, h);
+      const baseR = minSide * (isFullMode ? 0.15 : 0.11) * (1 + eqBass * 0.28);
+      const maxLen = minSide * (isFullMode ? 0.34 : 0.24);
+      const alpha = isFullMode ? 0.95 : 0.42;
+      const total = EQ_RADIAL_COUNT;
+      const rotation = elapsed * 0.08;
+
+      eqSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+      for (let s = 0; s < total; s++) {
+        const bin = s < EQ_BINS ? s : (total - 1 - s);
+        const v = eqSpectrum[Math.max(0, Math.min(EQ_BINS - 1, bin))];
+        const ang = (s / total) * Math.PI * 2 + rotation;
+        const len = baseR + v * maxLen;
+        const c = eqPaletteColor(bin / EQ_BINS, elapsed);
+        const line = eqRadialLines[s];
+        line.setAttribute('x1', (cx + Math.cos(ang) * baseR).toFixed(2));
+        line.setAttribute('y1', (cy + Math.sin(ang) * baseR).toFixed(2));
+        line.setAttribute('x2', (cx + Math.cos(ang) * len).toFixed(2));
+        line.setAttribute('y2', (cy + Math.sin(ang) * len).toFixed(2));
+        line.setAttribute('stroke', eqRgba(c, alpha));
+        line.setAttribute('stroke-width', (isFullMode ? 2.8 : 2.0).toFixed(2));
+        line.style.opacity = '1';
+      }
+
+      const coreColor = eqPaletteColor(0.5, elapsed);
+      eqRadialCore.setAttribute('cx', cx.toFixed(2));
+      eqRadialCore.setAttribute('cy', cy.toFixed(2));
+      eqRadialCore.setAttribute('r', (baseR * (0.62 + eqBeatHold * 0.35)).toFixed(2));
+      eqRadialCore.setAttribute('fill', eqRgba(coreColor, (isFullMode ? 0.24 : 0.14) + eqBeatHold * 0.28));
+      eqRadialCore.setAttribute('stroke', eqRgba(coreColor, isFullMode ? 0.45 : 0.24));
+      eqRadialCore.setAttribute('stroke-width', (1.5 + eqBass * 2.5).toFixed(2));
+      eqRadialCore.style.opacity = '1';
+    }
+
+    function renderEqTunnel(dt) {
+      if (eqCssW <= 0 || eqCssH <= 0) eqResize();
+      const w = eqCssW;
+      const h = eqCssH;
+      if (w <= 0 || h <= 0) return;
+
+      const isFullMode = eqVisualizer.classList.contains('show-full');
+      const elapsed = performance.now() / 1000;
+      const cx = w / 2;
+      const cy = h / 2;
+      const maxR = Math.hypot(w, h) * (isFullMode ? 0.58 : 0.46);
+      const speed = 1 + eqBass * 1.8;
+      const phase = (elapsed * 0.6 * speed) % 1;
+      const alphaScale = isFullMode ? 1 : 0.46;
+
+      eqSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+      for (let i = EQ_TUNNEL_RINGS - 1; i >= 0; i--) {
+        const k = (i + phase) / EQ_TUNNEL_RINGS;
+        const r = Math.pow(k, 2.15) * maxR + Math.min(w, h) * 0.045;
+        const rot = elapsed * 0.3 + i * 0.15 + eqMid * 1.1;
+        const c = eqPaletteColor(k + elapsed * 0.04, elapsed);
+        let points = '';
+        for (let s = 0; s < EQ_TUNNEL_SIDES; s++) {
+          const a = rot + (s / EQ_TUNNEL_SIDES) * Math.PI * 2;
+          const wobble = 1 + 0.055 * Math.sin(a * 3 + elapsed + eqTreble * 2);
+          const x = cx + Math.cos(a) * r * wobble;
+          const y = cy + Math.sin(a) * r * wobble;
+          points += `${x.toFixed(2)},${y.toFixed(2)} `;
+        }
+        const poly = eqTunnelRings[i];
+        poly.setAttribute('points', points.trim());
+        poly.setAttribute('stroke', eqRgba(c, Math.max(0, (1 - k) * 0.9 * alphaScale)));
+        poly.setAttribute('stroke-width', (1.4 + (1 - k) * 3.8 + eqBass * 2.6).toFixed(2));
+        poly.style.opacity = '1';
+      }
+
+      const spokeAlpha = Math.max(0, Math.min(1, (eqBeatHold - 0.12) * 1.8));
+      for (let s = 0; s < EQ_TUNNEL_SIDES; s++) {
+        const a = elapsed * 0.3 + (s / EQ_TUNNEL_SIDES) * Math.PI * 2;
+        const r = Math.min(w, h) * (0.24 + eqBeatHold * 0.18);
+        const c = eqPaletteColor(s / EQ_TUNNEL_SIDES + elapsed * 0.04, elapsed);
+        const line = eqTunnelSpokes[s];
+        line.setAttribute('x1', cx.toFixed(2));
+        line.setAttribute('y1', cy.toFixed(2));
+        line.setAttribute('x2', (cx + Math.cos(a) * r).toFixed(2));
+        line.setAttribute('y2', (cy + Math.sin(a) * r).toFixed(2));
+        line.setAttribute('stroke', eqRgba(c, spokeAlpha * alphaScale));
+        line.setAttribute('stroke-width', (1.0 + eqBass * 1.8).toFixed(2));
+        line.style.opacity = spokeAlpha > 0.01 ? '1' : '0';
+      }
+    }
+
+    // Re-measure the visualizer whenever the root cell does.
+    // ResizeObserver on rootEl already fires applyLayout; the EQ tracks
     // the root naturally because it's positioned `inset: 0`. We piggyback
     // on the existing observer further down for DPR/dimension sync.
 
@@ -2175,7 +2520,7 @@
       rootEl.classList.toggle('listening-equalizer',
         listeningMode && optListeningView === 2);
       // Equalizer visibility depends on the same flags — recompute every
-      // time the listening state changes so the canvas comes in / drops
+      // time the listening state changes so the visualizer comes in / drops
       // out as a unit.
       applyEqVisibility();
     }
@@ -2563,6 +2908,12 @@
     // fires the registered handler AND debounces a POST to the host
     // settings endpoint.
 
+    function formatSliderValue(v, item) {
+      const num = Number(v) || 0;
+      const sign = item.signed ? (num > 0 ? '+' : num === 0 ? '+' : '') : '';
+      return sign + num + (item.unit ? ' ' + item.unit : '');
+    }
+
     function renderSettingRow(item) {
       const row = document.createElement('div');
       row.className = 'settings-row settings-row-' + item.type;
@@ -2578,8 +2929,7 @@
       if (item.type === 'slider') {
         valueDisplay = document.createElement('div');
         valueDisplay.className = 'settings-value';
-        const current = settings[item.key];
-        valueDisplay.textContent = current + (item.unit ? ' ' + item.unit : '');
+        valueDisplay.textContent = formatSliderValue(settings[item.key], item);
         meta.appendChild(valueDisplay);
       } else if (item.sub) {
         const sub = document.createElement('div');
@@ -2632,7 +2982,7 @@
         input.value = String(value);
         input.addEventListener('input', () => {
           const v = Number(input.value);
-          if (valueDisplay) valueDisplay.textContent = v + (item.unit ? ' ' + item.unit : '');
+          if (valueDisplay) valueDisplay.textContent = formatSliderValue(v, item);
           updateSetting(item.key, v);
         });
         row.appendChild(input);
@@ -2641,65 +2991,75 @@
       return row;
     }
 
-    function renderSettingsList() {
-      const frag = document.createDocumentFragment();
-
-      const header = document.createElement('div');
-      header.className = 'list-header';
-      const title = document.createElement('div');
-      title.className = 'lh-title';
-      title.textContent = 'Settings';
-      header.appendChild(title);
-      frag.appendChild(header);
-
-      for (const section of SETTING_SECTIONS) {
-        const sec = document.createElement('div');
-        sec.className = 'settings-section';
-        const stitle = document.createElement('div');
-        stitle.className = 'settings-section-title';
-        stitle.textContent = section.title;
-        sec.appendChild(stitle);
-        for (const item of section.items) sec.appendChild(renderSettingRow(item));
-        frag.appendChild(sec);
+    function renderSettingsTabs() {
+      const tabs = document.createElement('div');
+      tabs.className = 'settings-tabs';
+      for (const tab of SETTING_TABS) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'settings-tab';
+        if (tab.id === settingsActiveTab) btn.classList.add('active');
+        btn.innerHTML =
+          '<svg viewBox="0 0 24 24" aria-hidden="true">' + tab.icon + '</svg>'
+          + '<span>' + tab.label + '</span>';
+        btn.addEventListener('click', () => {
+          settingsActiveTab = tab.id;
+          renderSettingsList();
+        });
+        tabs.appendChild(btn);
       }
+      return tabs;
+    }
 
-      // Audio source entry-point — gateway to the dedicated audio-source
-      // sub-view (which we already render separately because it loads
-      // device data from the host).
-      const audioSection = document.createElement('div');
-      audioSection.className = 'settings-section';
-      const aTitle = document.createElement('div');
-      aTitle.className = 'settings-section-title';
-      aTitle.textContent = 'Audio source';
-      audioSection.appendChild(aTitle);
-      const aRow = document.createElement('button');
-      aRow.type = 'button';
-      aRow.className = 'list-row';
-      const aIcon = document.createElement('div');
-      aIcon.className = 'lr-art';
-      aIcon.style.display = 'flex';
-      aIcon.style.alignItems = 'center';
-      aIcon.style.justifyContent = 'center';
-      aIcon.style.fontSize = '18px';
-      aIcon.textContent = '🔊';
-      const aMeta = document.createElement('div');
-      aMeta.className = 'lr-meta';
-      const aName = document.createElement('div');
-      aName.className = 'lr-name';
-      aName.textContent = 'Equalizer audio source';
-      const aSub = document.createElement('div');
-      aSub.className = 'lr-sub';
-      aSub.textContent = audioSourceActiveName || 'System default';
-      aMeta.appendChild(aName);
-      aMeta.appendChild(aSub);
-      aRow.appendChild(aIcon);
-      aRow.appendChild(aMeta);
-      aRow.addEventListener('click', () => {
+    function renderAudioSourceLinkRow() {
+      // Special-case row used in the Equalizer tab — opens the
+      // audio-source sub-view that lists Windows render endpoints.
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'list-row';
+      const icon = document.createElement('div');
+      icon.className = 'lr-art';
+      icon.style.display = 'flex';
+      icon.style.alignItems = 'center';
+      icon.style.justifyContent = 'center';
+      icon.style.fontSize = '20px';
+      icon.textContent = '🔊';
+      const meta = document.createElement('div');
+      meta.className = 'lr-meta';
+      const name = document.createElement('div');
+      name.className = 'lr-name';
+      name.style.fontSize = '17px';
+      name.textContent = 'Audio source';
+      const sub = document.createElement('div');
+      sub.className = 'lr-sub';
+      sub.style.fontSize = '14px';
+      sub.textContent = audioSourceActiveName || 'System default';
+      meta.appendChild(name);
+      meta.appendChild(sub);
+      row.appendChild(icon);
+      row.appendChild(meta);
+      row.addEventListener('click', () => {
         audioSourceFrom = 'settings';
         setView('audio-source');
       });
-      audioSection.appendChild(aRow);
-      frag.appendChild(audioSection);
+      return row;
+    }
+
+    function renderSettingsList() {
+      const frag = document.createDocumentFragment();
+      frag.appendChild(renderSettingsTabs());
+
+      const tab = SETTING_TABS.find(t => t.id === settingsActiveTab) || SETTING_TABS[0];
+      const sec = document.createElement('div');
+      sec.className = 'settings-section';
+      for (const item of tab.items) {
+        if (item.type === 'audio-source-link') {
+          sec.appendChild(renderAudioSourceLinkRow());
+        } else {
+          sec.appendChild(renderSettingRow(item));
+        }
+      }
+      frag.appendChild(sec);
 
       listViewEl.textContent = '';
       listViewEl.appendChild(frag);
@@ -2943,13 +3303,11 @@
 
     async function pollOnce() {
       try {
-        // No round-trip compensation. The earlier "halfRoundTrip" patch
-        // measured (fetchEnd - fetchStart) which includes host-side SMTC
-        // calls + two JSON serializations — most of that isn't transit.
-        // Adding half of it to the position pushed the highlight 30-60ms
-        // ahead of the audio, which feels noticeably worse than the tiny
-        // natural lag of doing nothing. v1's behavior was just: anchor
-        // serverPos at the moment we received it. Matching that here.
+        // Host returns both SMTC position and the UTC moment that position
+        // was sampled/extrapolated. We map that wall-clock timestamp into
+        // this process' performance.now() timeline, so host work after the
+        // sample (album-art cache refresh, JSON serialization, localhost
+        // transport) doesn't become lyric-sync drift.
         const [npRes, ssRes] = await Promise.all([
           fetch(HOST + '/api/media/now-playing'),
           fetch(HOST + '/api/spotify/status'),
@@ -3004,8 +3362,7 @@
         lastCanPrev = setBtnEnabled(prevBtn, !!np.canGoPrevious, lastCanPrev);
         lastCanNext = setBtnEnabled(nextBtn, !!np.canGoNext, lastCanNext);
 
-        // Position anchor. Use serverPos as-is and anchor it at fetchEnd
-        // (the moment we received the response).
+        // Position anchor. Use serverPos at the host's sample time.
         // Then apply a small constant slowdown — SMTC + Windows audio
         // pipeline + speaker buffer typically adds ~30ms of latency between
         // "where the file pointer is" and "what the listener hears". Without
@@ -3019,7 +3376,14 @@
         const serverPos = rawPos - PERCEPTUAL_LAG_MS;
         durationMs = typeof np.durationMs === 'number' ? np.durationMs : 0;
         const trackKey = (np.title || '') + '|' + (np.artist || '');
-        const now = fetchEnd;
+        const capturedUtcMs = typeof np.positionCapturedAtUtcMs === 'number'
+          ? np.positionCapturedAtUtcMs
+          : 0;
+        const sampleAgeMs = capturedUtcMs > 0 ? Date.now() - capturedUtcMs : NaN;
+        const sampleAt = Number.isFinite(sampleAgeMs) && sampleAgeMs >= 0 && sampleAgeMs < 10_000
+          ? fetchEnd - sampleAgeMs
+          : fetchEnd;
+        const now = sampleAt;
         const trackChanged = trackKey !== lastTrackKey;
         if (anchorAt === 0 || trackChanged) {
           anchorPosMs = serverPos;
@@ -3070,6 +3434,7 @@
     artEl.addEventListener('error', () => {
       artEl.classList.add('empty');
       lastHasArt = false;
+      invalidateEqLayoutCache();
       // No cover → fall back to default green palette for the EQ.
       deriveEqColors(null);
       // Album theme also re-syncs to the default green accent.
@@ -3083,6 +3448,7 @@
     // button / progress fill / current lyric color all shift with the
     // new cover.
     artEl.addEventListener('load', () => {
+      invalidateEqLayoutCache();
       updateEqColorsFromArt();
       if (optTheme === 0) applyTheme();
     });
@@ -3139,7 +3505,7 @@
       // submode change immediately without having to wait for idle to flip.
       if (listeningMode) applyListeningMode();
       // EQ visibility tracks listeningView even outside listening mode (so
-      // toggling the option mid-session still produces the right canvas
+      // toggling the option mid-session still produces the right visualizer
       // state — most notably, dropping the EQ stream when leaving submode 2).
       applyEqVisibility();
     });
@@ -3151,6 +3517,14 @@
       const n = Number(value);
       optTheme = Number.isFinite(n) ? Math.max(0, Math.min(5, Math.round(n))) : 0;
       applyTheme();
+      invalidateEqLayoutCache();
+    });
+    registerSetting('eqVisualizerMode', value => {
+      const n = Number(value);
+      optEqVisualizerMode = Number.isFinite(n) ? Math.max(0, Math.min(2, Math.round(n))) : 0;
+      applyEqMode();
+      invalidateEqLayoutCache();
+      if (eqWanted()) renderEqFrame(1 / 60);
     });
     registerSetting('eqShowAlbumArt', value => {
       optEqShowAlbumArt = value === true || value === 'true';
@@ -3167,7 +3541,7 @@
     startPollTimer();
     setInterval(tick, TICK_MS);
     // Slow Spotify pollers — separate cadences from the main 1.5s poll.
-    // Queue refreshes 6s; playlists every 10 min (host caches 30 min,
+    // Queue refreshes every 10s; playlists every 10 min (host caches 30 min,
     // and Spotify rate-limits /me/playlists hard if hammered).
     queueTimer = setInterval(pollSpotifyQueue, SPOTIFY_QUEUE_MS);
     playlistsTimer = setInterval(pollSpotifyPlaylists, SPOTIFY_PLAYLISTS_MS);

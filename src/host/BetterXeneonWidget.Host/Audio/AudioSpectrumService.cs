@@ -14,22 +14,20 @@ namespace BetterXeneonWidget.Host.Audio;
 /// other source) is making sound, this picks it up — we don't need any
 /// per-app capture, and we don't need cooperation from the player.
 ///
-/// FFT size 1024 samples → ~21ms per frame at 48 kHz → ~46 spectrum frames
-/// per second, plenty for visualization. NAudio's FFT wants log2(N) as the
-/// "M" argument, so 1024 = 2^10.
+/// FFT size 2048 samples with a 50% hop → ~47 spectrum frames/sec at 48 kHz
+/// and ~94/sec at 96 kHz. NAudio's FFT wants log2(N) as the "M" argument,
+/// so 2048 = 2^11.
 /// </summary>
 public sealed class AudioSpectrumService : IDisposable
 {
-    // FFT_SIZE = 2048 → 23.4Hz resolution at 48kHz. The previous 1024
-    // produced 47Hz per FFT bin which left most sub-130Hz log-bands empty
-    // (the lowest ~15 output bins had no FFT bin falling inside their
-    // narrow ranges). 2048 puts at least one FFT bin in every output
-    // band down to ~50Hz, so the bass bars actually move. Cost: ~43ms
-    // capture-to-spectrum latency (was 21ms) — fine for visualization.
+    // FFT_SIZE = 2048 → 23.4Hz resolution at 48kHz, 46.9Hz at 96kHz.
+    // Starting the visual range near that practical floor avoids fake
+    // sub-bass bands that are below the capture device's FFT resolution.
     private const int FFT_SIZE = 2048;
     private const int FFT_LOG = 11;
+    private const int FFT_HOP = FFT_SIZE / 2;
     private const int NUM_BINS = 64;
-    private const float FREQ_LOW = 25f;       // lowest bin lower edge (Hz)
+    private const float FREQ_LOW = 45f;       // lowest bin lower edge (Hz)
     private const float FREQ_HIGH = 16000f;   // highest bin upper edge (Hz)
 
     private readonly ILogger<AudioSpectrumService> _log;
@@ -216,7 +214,8 @@ public sealed class AudioSpectrumService : IDisposable
             if (_sampleBufferPos >= FFT_SIZE)
             {
                 ProcessFft(fmt.SampleRate);
-                _sampleBufferPos = 0;
+                Array.Copy(_sampleBuffer, FFT_HOP, _sampleBuffer, 0, FFT_SIZE - FFT_HOP);
+                _sampleBufferPos = FFT_SIZE - FFT_HOP;
             }
         }
     }
@@ -250,49 +249,43 @@ public sealed class AudioSpectrumService : IDisposable
             edges[j] = MathF.Exp(logLow + (logHigh - logLow) * t);
         }
 
-        // Walk FFT bins once, accumulate into the output bin whose [lo, hi)
-        // contains the bin's center frequency. Track counts so we can average.
-        Span<int> counts = stackalloc int[NUM_BINS];
+        // Precompute magnitudes once, then sample each visual log-band.
+        // High-rate render devices (96kHz etc.) make the lowest bands
+        // narrower than one FFT bin. Interpolating those unresolved bands
+        // keeps the left edge smooth instead of manufacturing an artificial
+        // stepped "intro section" from empty-bin backfill.
+        Span<float> magnitudes = stackalloc float[half];
         for (int k = 1; k < half; k++)
         {
-            float freq = k * hzPerBin;
-            if (freq < edges[0]) continue;
-            if (freq >= edges[NUM_BINS]) break;
-
-            // Binary search for the output bin. With NUM_BINS=64 a linear
-            // scan from the previous index would be fine too — keeping
-            // binary for clarity.
-            int lo = 0, hi = NUM_BINS;
-            while (hi - lo > 1)
-            {
-                int mid = (lo + hi) >> 1;
-                if (freq < edges[mid]) hi = mid; else lo = mid;
-            }
-
-            float mag = MathF.Sqrt(_fftBuffer[k].X * _fftBuffer[k].X + _fftBuffer[k].Y * _fftBuffer[k].Y);
-            _raw[lo] += mag;
-            counts[lo]++;
+            magnitudes[k] = MathF.Sqrt(_fftBuffer[k].X * _fftBuffer[k].X + _fftBuffer[k].Y * _fftBuffer[k].Y);
         }
 
         for (int j = 0; j < NUM_BINS; j++)
         {
-            if (counts[j] > 0) _raw[j] /= counts[j];
-        }
+            float bandLo = edges[j];
+            float bandHi = edges[j + 1];
+            int loBin = Math.Max(1, (int)MathF.Ceiling(bandLo / hzPerBin));
+            int hiBin = Math.Min(half - 1, (int)MathF.Floor(bandHi / hzPerBin));
 
-        // Fill empty bands with their nearest left neighbor (then nearest
-        // right). Even after the FFT_SIZE bump there can be holes at the
-        // very low end depending on sample rate (44.1kHz audio gives a
-        // 21.5Hz/bin resolution — fine for 25Hz+ but the bottom 1-2 bands
-        // can still be empty depending on where the FFT bins land). Holes
-        // look weird as a dead-flat bar next to active ones; copying from
-        // the neighbor produces a more continuous spectrum.
-        for (int j = 1; j < NUM_BINS; j++)
-        {
-            if (counts[j] == 0) _raw[j] = _raw[j - 1] * 0.7f;
-        }
-        for (int j = NUM_BINS - 2; j >= 0; j--)
-        {
-            if (counts[j] == 0 && _raw[j] == 0) _raw[j] = _raw[j + 1] * 0.7f;
+            if (loBin <= hiBin)
+            {
+                float sum = 0f;
+                int count = 0;
+                for (int k = loBin; k <= hiBin; k++)
+                {
+                    sum += magnitudes[k];
+                    count++;
+                }
+                _raw[j] = count > 0 ? sum / count : 0f;
+            }
+            else
+            {
+                float centerHz = MathF.Sqrt(bandLo * bandHi);
+                float exactBin = centerHz / hzPerBin;
+                int leftBin = Math.Clamp((int)MathF.Floor(exactBin), 1, half - 2);
+                float frac = Math.Clamp(exactBin - leftBin, 0f, 1f);
+                _raw[j] = magnitudes[leftBin] + (magnitudes[leftBin + 1] - magnitudes[leftBin]) * frac;
+            }
         }
 
         // Normalize. FFT magnitudes for windowed real input scale with
@@ -303,13 +296,13 @@ public sealed class AudioSpectrumService : IDisposable
         //
         // TARGET 1.2: where we want the loudest band to land. CEILING 1.4
         // leaves a bit of overshoot room for transients without clipping.
-        // PEAK_DECAY 0.99: ~3s half-life at ~23 FFTs/sec — fast enough to
-        // adapt between songs / dynamic passages, slow enough not to
-        // pump on every individual kick.
+        // PEAK_DECAY 0.995: with the 50% FFT hop this stays slow enough
+        // not to pump on individual kicks, while still adapting between
+        // songs / dynamic passages.
         const float CEILING = 1.4f;
         const float MIN_PEAK = 0.003f;     // floor so auto-gain doesn't divide by ~0
         const float TARGET = 1.2f;         // where we want recent peaks to land
-        const float PEAK_DECAY = 0.99f;
+        const float PEAK_DECAY = 0.995f;
 
         // Track the loudest current-frame raw value and let it decay so
         // the visual normalization adapts to the song's current dynamic
@@ -339,9 +332,11 @@ public sealed class AudioSpectrumService : IDisposable
                 // genuine silence stays at 0 (gamma would otherwise lift
                 // floor noise off the baseline).
                 float target = linear < 0.03f ? linear : MathF.Pow(linear / CEILING, GAMMA) * CEILING;
-                // Asymmetric smoothing — fast attack, slow release. Matches
-                // the perceptual feel of a stereo EQ display.
-                float a = target > _smoothed[j] ? 0.55f : 0.18f;
+                // Asymmetric smoothing — fast attack, slower release. The
+                // overlapped FFT already gives us denser updates, so these
+                // coefficients keep the display tight without making quiet
+                // floor noise flicker.
+                float a = target > _smoothed[j] ? 0.62f : 0.22f;
                 _smoothed[j] = _smoothed[j] + (target - _smoothed[j]) * a;
             }
 
