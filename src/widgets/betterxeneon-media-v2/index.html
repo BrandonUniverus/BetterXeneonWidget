@@ -1795,6 +1795,51 @@
     // because the album theme doesn't use a class — its accent values
     // are set inline by JS so they track the current cover.
     const THEME_NAMES = [null, 'rainbow', 'neon', 'sunset', 'aurora', 'mono'];
+    // Static hex values for the named themes (indices 1..5). Must mirror the
+    // .theme-* --theme-accent values in the CSS block above — kept here so
+    // publishCurrentThemeAccent() doesn't have to read getComputedStyle
+    // (which returns rgb() form and isn't reliable until layout settles).
+    // Index 0 is null because album mode is dynamic — its accent is built
+    // from eqColorTop.
+    const THEME_ACCENT_HEX = [
+      null,
+      '#ff3b6b', // rainbow
+      '#00e5ff', // neon
+      '#ff5e87', // sunset
+      '#3ce0ff', // aurora
+      '#ffffff', // mono
+    ];
+
+    function _rgbToHex(r, g, b) {
+      const c = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+      return '#' + c(r) + c(g) + c(b);
+    }
+
+    /**
+     * Publishes the *effective* current accent hex to the shared widget
+     * settings under `currentThemeAccent`. The audio-switcher widget reads
+     * this and applies it to its own --accent-color so both widgets always
+     * agree on a single accent — including for the album theme where the
+     * value is derived from the cover and changes every track.
+     *
+     * Called from applyTheme, which is itself called whenever the user
+     * changes the theme setting or whenever new album art is processed and
+     * we're in album mode. updateSetting short-circuits when the value
+     * hasn't changed AND saveSettings is debounced, so back-to-back
+     * applyTheme calls with identical effective accents don't generate
+     * redundant POSTs.
+     */
+    function publishCurrentThemeAccent() {
+      let hex;
+      if (optTheme === 0) {
+        // Album mode — eqColorTop was updated by updateEqColorsFromArt
+        // before applyTheme runs in the artEl load handler.
+        hex = _rgbToHex(eqColorTop[0], eqColorTop[1], eqColorTop[2]);
+      } else {
+        hex = THEME_ACCENT_HEX[optTheme] ?? '#1db954';
+      }
+      updateSetting('currentThemeAccent', hex);
+    }
 
     // --- Preset palettes (ported from the Equalizer.zip prototype) ------
     // Each is a function (t, time) → [r,g,b] where t ∈ [0,1] is the bar
@@ -2144,6 +2189,13 @@
       } else {
         cls.add('theme-' + name);
       }
+
+      // Share the effective accent with the audio-switcher widget.
+      // updateSetting short-circuits when unchanged AND saveSettings is
+      // debounced, so calling this at the end of every applyTheme is safe:
+      // no thrash on idle, picks up new album colors as soon as the cover
+      // loads.
+      publishCurrentThemeAccent();
     }
 
     function applyEqVisibility() {

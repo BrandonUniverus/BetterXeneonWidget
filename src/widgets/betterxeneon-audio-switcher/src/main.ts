@@ -7,26 +7,9 @@ import { appStore, loadConfig } from './state.ts';
 import './style.css';
 
 const FALLBACK_ACCENT = '#0078d4';
-
-/**
- * Mirrors the .theme-* CSS palettes in src/widgets/betterxeneon-media-v2/
- * index.html (the `--theme-accent` values). Keep this table in sync if the
- * media widget gains/changes themes — the audio-switcher tracks the media
- * widget's `theme` setting (0..5) and applies the matching accent so the
- * two widgets visually agree on a single accent at all times.
- *
- * Index 0 ("album") is null because the media widget derives that accent
- * from the current album art — the audio-switcher has no album context
- * here, so we fall back to the host's system accent for theme 0.
- */
-const THEME_ACCENTS: ReadonlyArray<string | null> = [
-  null,        // 0 = album (derived) → fall back to systemAccent
-  '#ff3b6b',   // 1 = rainbow palette → static accent for non-eq UI
-  '#00e5ff',   // 2 = neon
-  '#ff5e87',   // 3 = sunset
-  '#3ce0ff',   // 4 = aurora
-  '#ffffff',   // 5 = mono
-];
+// Hex sanity check — three or six hex digits after a leading '#'. Anything
+// else (rgb(...), named colors, garbage) is rejected so we fall back cleanly.
+const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 function applyTheme(): void {
   const root = document.documentElement;
@@ -37,34 +20,28 @@ function applyTheme(): void {
   const useSystem = getIcueProperty<boolean>('useSystemAccent');
   const customAccent = getIcueProperty<string>('accentColor');
 
-  // Pull both the system accent and the shared widget-settings snapshot in
-  // a single subscribe() call — read once, unsubscribe immediately. Cheaper
-  // than two subscribes and guarantees a consistent view of the store.
+  // Pull system accent and the shared widget-settings snapshot in a single
+  // subscribe() call — read once, unsubscribe immediately.
   let systemAccent: string | null = null;
-  let themeIndex: number | null = null;
+  let publishedAccent: string | null = null;
   appStore.subscribe(s => {
     systemAccent = s.systemAccentColor;
-    const raw = s.widgetSettings?.theme;
-    const n = typeof raw === 'number' ? raw : Number(raw);
-    themeIndex = Number.isFinite(n) ? Math.max(0, Math.min(5, Math.round(n))) : null;
+    const v = s.widgetSettings?.currentThemeAccent;
+    publishedAccent = typeof v === 'string' && HEX_RE.test(v) ? v : null;
   })();
 
   // Resolution order for the accent:
-  //   1. Media widget's chosen theme (if set & non-album). This is the
-  //      "match the other widget" behavior — overrides everything else.
+  //   1. `currentThemeAccent` published by the media widget — already the
+  //      *effective* accent (album-derived hex when theme=0, or the named
+  //      palette's hex for theme 1..5). This is the "match the other
+  //      widget" behavior. Missing when the media widget hasn't run yet.
   //   2. iCUE custom accent (only when useSystemAccent is explicitly off).
-  //      Kept for backwards-compat with any old iCUE option values that
-  //      might still be stored, even though the widget no longer exposes
-  //      these in its UI.
+  //      Kept for backwards-compat — the widget no longer exposes these
+  //      in its UI but old saved values might still be present.
   //   3. Host-reported Windows system accent.
   //   4. Hard-coded FALLBACK_ACCENT (Windows blue).
-  const themeAccent =
-    themeIndex !== null && themeIndex >= 0 && themeIndex < THEME_ACCENTS.length
-      ? THEME_ACCENTS[themeIndex]
-      : null;
-
   const accent =
-    themeAccent
+    publishedAccent
       ?? (useSystem === false && typeof customAccent === 'string' && customAccent
             ? customAccent
             : systemAccent ?? customAccent ?? FALLBACK_ACCENT);
