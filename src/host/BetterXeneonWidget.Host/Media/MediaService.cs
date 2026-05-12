@@ -60,7 +60,7 @@ public sealed class MediaService
     public async Task<NowPlayingDto> GetNowPlayingAsync()
     {
         var manager = await GetManagerAsync().ConfigureAwait(false);
-        var session = manager?.GetCurrentSession();
+        var session = manager is null ? null : PickSession(manager);
         if (session is null) return Empty();
 
         GlobalSystemMediaTransportControlsSessionMediaProperties? props;
@@ -166,7 +166,7 @@ public sealed class MediaService
     public async Task<TimelineDebugDto?> GetTimelineDebugAsync()
     {
         var manager = await GetManagerAsync().ConfigureAwait(false);
-        var session = manager?.GetCurrentSession();
+        var session = manager is null ? null : PickSession(manager);
         if (session is null) return null;
         var info = session.GetPlaybackInfo();
         var timeline = session.GetTimelineProperties();
@@ -203,7 +203,7 @@ public sealed class MediaService
     private async Task<bool> RunAsync(Func<GlobalSystemMediaTransportControlsSession, Task<bool>> op)
     {
         var manager = await GetManagerAsync().ConfigureAwait(false);
-        var session = manager?.GetCurrentSession();
+        var session = manager is null ? null : PickSession(manager);
         if (session is null) return false;
         try
         {
@@ -213,6 +213,55 @@ public sealed class MediaService
         {
             return false;
         }
+    }
+
+    private static GlobalSystemMediaTransportControlsSession? PickSession(
+        GlobalSystemMediaTransportControlsSessionManager manager)
+    {
+        var current = manager.GetCurrentSession();
+        IReadOnlyList<GlobalSystemMediaTransportControlsSession> sessions;
+        try
+        {
+            sessions = manager.GetSessions();
+        }
+        catch
+        {
+            return current;
+        }
+
+        GlobalSystemMediaTransportControlsSession? firstPlaying = null;
+        GlobalSystemMediaTransportControlsSession? firstSpotify = null;
+        GlobalSystemMediaTransportControlsSession? firstSession = null;
+
+        foreach (var session in sessions)
+        {
+            firstSession ??= session;
+            var sourceId = session.SourceAppUserModelId ?? string.Empty;
+            var isSpotify = sourceId.IndexOf("Spotify", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            GlobalSystemMediaTransportControlsSessionPlaybackInfo? info;
+            try
+            {
+                info = session.GetPlaybackInfo();
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (info?.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+            {
+                if (isSpotify) return session;
+                firstPlaying ??= session;
+            }
+
+            if (isSpotify)
+            {
+                firstSpotify ??= session;
+            }
+        }
+
+        return firstPlaying ?? current ?? firstSpotify ?? firstSession;
     }
 
     private static string BuildArtKey(string source, string title) => $"{source}|{title}";
