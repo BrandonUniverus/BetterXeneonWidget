@@ -997,9 +997,6 @@
           </svg>
         </button>
       </div>
-      <div class="phase">
-        <span class="pulse" id="pulse"></span><span id="status">media v2</span>
-      </div>
     </div>
 
   </main>
@@ -1205,8 +1202,12 @@
     const fillEl = document.getElementById('fill');
     const curTimeEl = document.getElementById('curTime');
     const totTimeEl = document.getElementById('totTime');
-    const pulseEl = document.getElementById('pulse');
-    const statusEl = document.getElementById('status');
+    // pulseEl + statusEl used to be a "host healthy / error" indicator
+    // at the bottom-left. Removed from markup per user request — the
+    // refs stay so the polling code below can blind-update them via
+    // optional chaining without throwing.
+    const pulseEl = document.getElementById('pulse');     // may be null
+    const statusEl = document.getElementById('status');   // may be null
 
     const PLAY_PATH = 'M7 5l13 7-13 7z';
     const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
@@ -1391,6 +1392,7 @@
     }
 
     function flashPulse() {
+      if (!pulseEl) return;
       pulseEl.classList.add('live');
       if (pulseTimeout) clearTimeout(pulseTimeout);
       pulseTimeout = setTimeout(() => pulseEl.classList.remove('live'), 250);
@@ -3056,12 +3058,12 @@
           currentAlbum = '';
         }
 
-        statusEl.classList.remove('err');
-        statusEl.textContent = 'media v2';
+        statusEl?.classList.remove('err');
+        if (statusEl) statusEl.textContent = 'media v2';
         flashPulse();
       } catch (e) {
-        statusEl.classList.add('err');
-        statusEl.textContent = 'host offline · ' + (e.message || 'unknown error');
+        statusEl?.classList.add('err');
+        if (statusEl) statusEl.textContent = 'host offline · ' + (e.message || 'unknown error');
       }
     }
 
