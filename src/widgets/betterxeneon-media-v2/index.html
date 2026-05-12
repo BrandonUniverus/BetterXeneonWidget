@@ -2021,7 +2021,12 @@
       }
       // Reflection length: same as the bar, so a tall bar has a tall
       // reflection (proportional, looks more like real water reflection).
-      const reflectFactor = 1.0;
+      // Reflection is the "ghost" mirror below each bar. We want it in
+      // the background mode (lyrics float over it, gives depth), but
+      // NOT in full-screen mode — there it just reads as random
+      // duplicate bars cluttering an otherwise clean screensaver.
+      const isFullMode = eqCanvas.classList.contains('show-full');
+      const reflectFactor = isFullMode ? 0 : 1.0;
 
       const pad = w * 0.04;
 
