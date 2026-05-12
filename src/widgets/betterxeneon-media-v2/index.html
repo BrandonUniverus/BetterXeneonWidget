@@ -13,7 +13,20 @@
        settings panel deliberately exposes nothing for this widget — one
        source of truth keeps the UX coherent and lets us add new settings
        without re-registering iCUE meta tags. -->
-  <script id="x-icue-groups" type="application/json">[]</script>
+
+  <!-- iCUE requires AT LEAST ONE x-icue-property to import the widget
+       (an empty groups script or no properties at all is rejected as
+       "Unsupported or corrupted file" even when icueEvents is declared).
+       Ship a single hidden no-op property + dummy group purely to
+       satisfy the importer. The property's value is never read by the
+       widget — it's just there to keep iCUE happy. -->
+  <meta name="x-icue-property" content="_icuePlaceholder"
+        data-label="tr('(internal)')"
+        data-type="switch"
+        data-default="false">
+  <script id="x-icue-groups" type="application/json">
+    [{ "title": "tr('(internal)')", "properties": ["_icuePlaceholder"] }]
+  </script>
 
   <style>
     /* ---- Theme system ----------------------------------------------------
