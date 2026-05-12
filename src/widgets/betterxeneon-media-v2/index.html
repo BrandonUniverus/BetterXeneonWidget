@@ -641,7 +641,7 @@
       font-size: clamp(15px, 2.8vmin, 22px);
       line-height: 1.5;
     }
-    /* EQ-as-background mode: clamp to 5 lines, anchored near the bottom
+    /* EQ-as-background mode: clamp to 3 lines, anchored near the bottom
        just above the progress bar.
          - .lyrics absorbs all the free space above it (margin-top: auto)
          - .progress's normal margin-top: auto is overridden to 4px, so
@@ -650,7 +650,7 @@
            between the bottom lyric line and the progress bar. */
     .root.eq-as-bg .lyrics {
       flex: 0 0 auto;
-      height: calc(5 * 1.5em + 5 * 8px);
+      height: calc(3 * 1.5em + 3 * 8px);
       margin-top: auto;
     }
     .root.eq-as-bg .progress {
