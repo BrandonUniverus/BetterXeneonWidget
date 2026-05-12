@@ -5,13 +5,30 @@
   import { appStore } from '../state.ts';
   import VolumeSlider from './VolumeSlider.svelte';
 
-  let { session, deviceLabel }: { session: AudioSession; deviceLabel: string } = $props();
+  let { session, deviceLabel, lastSoundAt }: {
+    session: AudioSession;
+    deviceLabel: string;
+    /** Date.now() of the last poll when this session crossed the audibility
+     *  threshold. 0 = never produced sound. Drives the silent-row dim. */
+    lastSoundAt: number;
+  } = $props();
 
   let releaseTimer: ReturnType<typeof setTimeout> | null = null;
   let iconError = $state(false);
   const iconUrl = $derived(host.iconUrlForSession(session.id));
 
   const isInactive = $derived(session.state !== 'Active');
+
+  // "Silent" = not currently producing sound AND hasn't produced sound in the
+  // recent past. Threshold is slightly longer than a default poll interval
+  // (1500ms) so a session briefly between buffers doesn't flicker between
+  // bright and dim. Sessions that have never produced sound (lastSoundAt=0)
+  // fall through as silent because Date.now() - 0 is huge.
+  const SOUND_THRESHOLD = 0.01;
+  const QUIET_GRACE_MS = 2500;
+  const isSilent = $derived(
+    session.peak <= SOUND_THRESHOLD && (Date.now() - lastSoundAt) > QUIET_GRACE_MS
+  );
 
   const sendVolume = throttle((level: number) => {
     void host.setSessionVolume(session.id, level).catch(() => {/* surfaced via banner */});
@@ -62,7 +79,7 @@
   }
 </script>
 
-<div class="row" class:inactive={isInactive} class:muted={session.muted}>
+<div class="row" class:inactive={isInactive} class:silent={isSilent} class:muted={session.muted}>
   <div class="header">
     {#if !iconError}
       <img class="app-icon" src={iconUrl} alt="" onerror={() => iconError = true} />
@@ -98,6 +115,19 @@
      control look washed-out vs the OutputCard view — user complaint. */
   .row.inactive .name,
   .row.inactive .device-label {
+    opacity: 0.5;
+  }
+
+  /* Silent sessions (peak below audible threshold AND no sound in recent
+     past): dim the entire row, controls included, so the user's eye is drawn
+     to whatever's actually making noise. The row is still fully interactive
+     — opacity only — so adjusting volume on a quiet background app still
+     works. Uses a transition so the dim-in/brighten when sound starts and
+     stops doesn't look abrupt. */
+  .row {
+    transition: opacity 250ms ease;
+  }
+  .row.silent {
     opacity: 0.5;
   }
 

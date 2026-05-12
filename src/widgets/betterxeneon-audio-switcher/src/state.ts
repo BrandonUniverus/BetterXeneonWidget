@@ -23,6 +23,13 @@ export interface AppStateValue {
   // Has the user (or a previous first-run) ever set pins? When false, the
   // first poll cycle auto-pins the system default.
   configInitialized: boolean;
+  /**
+   * Per-session timestamp (Date.now()) of the last poll where the session's
+   * Peak crossed an audibility threshold. Used to sort Apps by most recent
+   * sound and to dim rows that haven't produced sound recently. Updated in
+   * polling.ts; not persisted across reloads.
+   */
+  lastSoundAtBySessionId: Record<string, number>;
 }
 
 const initial: AppStateValue = {
@@ -38,6 +45,7 @@ const initial: AppStateValue = {
   pendingDefaultId: null,
   configLoaded: false,
   configInitialized: false,
+  lastSoundAtBySessionId: {},
 };
 
 export const appStore = writable<AppStateValue>(initial);

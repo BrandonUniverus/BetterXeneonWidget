@@ -51,6 +51,20 @@ async function poll(): Promise<void> {
               : se
           );
 
+      // Audibility tracking. Threshold 0.01 (≈ -40dBFS) rejects digital noise
+      // floor and stray meter twitches; anything a user could plausibly hear
+      // will routinely exceed this. We update timestamps *only* for sessions
+      // currently in the list — sessions that disappear retain their last
+      // known timestamp until the map garbage-collects, which is fine because
+      // gone sessions won't be sorted/rendered anyway.
+      const now = Date.now();
+      const SOUND_THRESHOLD = 0.01;
+      const nextLastSound: Record<string, number> = { ...s.lastSoundAtBySessionId };
+      for (const se of sessions) {
+        if (se.peak > SOUND_THRESHOLD) nextLastSound[se.id] = now;
+      }
+      next.lastSoundAtBySessionId = nextLastSound;
+
       if (s.pendingDefaultId && devices.some(d => d.id === s.pendingDefaultId && d.isDefault)) {
         next.pendingDefaultId = null;
       }

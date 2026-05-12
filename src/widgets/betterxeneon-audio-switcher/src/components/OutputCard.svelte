@@ -15,6 +15,19 @@
     device.isDefault || $appStore.pendingDefaultId === device.id
   );
 
+  /**
+   * True when *some other* card is mid-switch — meaning a user clicked "make
+   * default" on another device and we're waiting for Windows to acknowledge.
+   * We lock this card down so the user can't queue a second switch on top of
+   * the first one (which is racey and confusing — Windows arbitrates between
+   * concurrent default-device calls in an unhelpful way). The card that *is*
+   * switching shows its own "switching…" pill and stays clickable for a UX
+   * sanity check (no-op cancel path).
+   */
+  const isLockedByOtherSwitch = $derived(
+    $appStore.pendingDefaultId !== null && $appStore.pendingDefaultId !== device.id
+  );
+
   // Throttle host calls during drag — UI updates immediately, network at most every ~80ms.
   const sendVolume = throttle((level: number) => {
     void host.setDeviceVolume(device.id, level).catch(() => {/* surfaced via banner */});
@@ -67,6 +80,10 @@
 
   async function makeDefault(): Promise<void> {
     if (isActiveDefault) return;
+    // Guard: another card is mid-switch. The disabled attribute already blocks
+    // clicks for mouse users, but keyboard/touch can sometimes bypass it on
+    // older platforms — belt and braces.
+    if (isLockedByOtherSwitch) return;
     appStore.update(s => ({ ...s, pendingDefaultId: device.id }));
     try {
       await host.setDefaultAudioDevice(device.id);
@@ -76,9 +93,15 @@
   }
 </script>
 
-<div class="card" class:active={isActiveDefault} class:muted={device.muted}>
+<div class="card" class:active={isActiveDefault} class:muted={device.muted} class:locked={isLockedByOtherSwitch} aria-disabled={isLockedByOtherSwitch}>
   <div class="header">
-    <button class="name-button" type="button" onclick={makeDefault} aria-label={`Set ${displayName} as default`}>
+    <button
+      class="name-button"
+      type="button"
+      onclick={makeDefault}
+      disabled={isLockedByOtherSwitch}
+      aria-label={`Set ${displayName} as default`}
+    >
       <span class="indicator" aria-hidden="true">
         {#if isActiveDefault}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
@@ -99,6 +122,7 @@
   <VolumeSlider
     value={device.volume}
     muted={device.muted}
+    disabled={isLockedByOtherSwitch}
     onChange={onVolumeChange}
     onToggleMute={toggleMute}
     onMaxVolume={setMaxVolume}
@@ -121,6 +145,16 @@
 
   .card.active {
     border-color: var(--accent-color);
+  }
+
+  /* Card is dimmed and pointer-blocked while a *different* card is switching.
+     Opacity tells the user something's happening; pointer-events:none guards
+     against clicks slipping through the button's disabled attr (especially
+     on touch devices where focus rings + tap-targets can be finicky). */
+  .card.locked {
+    opacity: 0.45;
+    pointer-events: none;
+    transition: opacity 150ms ease;
   }
 
   .header {

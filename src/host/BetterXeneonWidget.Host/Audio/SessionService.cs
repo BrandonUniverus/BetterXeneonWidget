@@ -148,6 +148,20 @@ public sealed class SessionService
 
             var displayName = string.IsNullOrWhiteSpace(session.DisplayName) ? processName : session.DisplayName;
 
+            // Peak amplitude from WASAPI's per-session meter (0..1). This
+            // is the loudest sample in the most recently committed audio
+            // buffer — non-zero indicates the session is actively making
+            // sound right now. Wrapped in try/catch because some sessions
+            // expose AudioMeterInformation but reject reads (e.g. exclusive-
+            // mode endpoints), in which case we just report 0 peak.
+            float peak = 0f;
+            try
+            {
+                var meter = session.AudioMeterInformation;
+                if (meter != null) peak = meter.MasterPeakValue;
+            }
+            catch { /* report as silent */ }
+
             dto = new AudioSessionDto(
                 Id: session.GetSessionInstanceIdentifier ?? $"{device.ID}|{pid}",
                 DeviceId: device.ID,
@@ -157,7 +171,8 @@ public sealed class SessionService
                 DisplayName: displayName,
                 State: session.State.ToString(),
                 Volume: (int)Math.Round(session.SimpleAudioVolume.Volume * 100f),
-                Muted: session.SimpleAudioVolume.Mute);
+                Muted: session.SimpleAudioVolume.Mute,
+                Peak: peak);
             return true;
         }
         catch

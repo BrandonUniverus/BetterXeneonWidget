@@ -16,6 +16,13 @@ export interface AudioSession {
   state: string;
   volume: number;
   muted: boolean;
+  /**
+   * Real-time peak amplitude (0..1) from WASAPI's per-session meter.
+   * Non-zero means this session has produced sound in the last audio
+   * buffer. Widget uses this to sort "currently making sound" first
+   * and to dim rows that haven't produced sound recently.
+   */
+  peak: number;
 }
 
 export interface VolumeState {
