@@ -1057,6 +1057,17 @@
       saveSettings();
     }
 
+    // iCUE lifecycle stub. The icuewidget CLI validator rejects any
+    // widget that doesn't declare `globalThis.icueEvents` with these
+    // two handlers — even when (as here) the widget no longer surfaces
+    // any iCUE-managed properties. Keeping them as no-ops is enough to
+    // pass validation and import cleanly. All settings flow through the
+    // host (loadSettings / saveSettings / updateSetting) instead.
+    globalThis.icueEvents = {
+      onICUEInitialized: () => {},
+      onDataUpdated: () => {},
+    };
+
     // Live snapshots of each Behavior option. The auto-expand pair is
     // parked here until the listening-mode phase lands — registering them
     // now keeps the iCUE settings panel in sync with v1's layout.
