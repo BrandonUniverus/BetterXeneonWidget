@@ -300,7 +300,7 @@
       height: 38px;
       border-radius: 50%;
       border: none;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(0, 0, 0, 0.55);   /* dark backdrop so the button reads against EQ / album bg */
       color: var(--theme-accent);  /* tint the glyph with accent — clearer affordance */
       display: flex;
       align-items: center;
@@ -579,11 +579,21 @@
        KEEPS .header-right visible (so the settings gear button stays
        reachable for the user to tap-to-dismiss). Hide the up-next chip
        and queue button inside header-right since their context is gone;
-       only the settings button remains. */
+       only the settings button remains.
+       Also give the .list-view (where the settings UI is rendered) a
+       solid dark backdrop with rounded corners so the album-art / EQ
+       behind doesn't fight the labels for legibility. Scoped to
+       settings-mode only — playlists / queue / audio-source still get
+       the bg art / spectrum showing through. */
     .root.settings-mode .progress,
     .root.settings-mode .phase { display: none; }
     .root.settings-mode .upnext-chip,
     .root.settings-mode .queue-btn:not(.settings-btn) { display: none; }
+    .root.settings-mode .list-view {
+      background: rgba(0, 0, 0, 0.85);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
 
     /* -- Listening (screensaver) mode --------------------------------------
        Three sub-modes, gated by the iCUE Listening view dropdown. The
