@@ -641,28 +641,20 @@
       font-size: clamp(15px, 2.8vmin, 22px);
       line-height: 1.5;
     }
-    /* EQ-as-background mode: clamp to 5 lines, position dead-center
-       vertically.
-         - .content gets position: relative so we can absolute-position
-           the lyric band against it.
-         - .lyrics is taken out of flex flow (position: absolute, top:
-           50%, translateY -50%). Flex slack divides between the
-           remaining items normally — header anchors at top, .progress
-           keeps its margin-top: auto and anchors at bottom.
-         - The center position puts the lyric band over the spectrum
-           reflection. Combined with the bumped current-line styling
-           (font glow + size + weight), the text reads cleanly over the
-           bars. */
-    .root.eq-as-bg .content { position: relative; }
+    /* EQ-as-background mode: clamp to 5 lines, anchored near the bottom
+       just above the progress bar.
+         - .lyrics absorbs all the free space above it (margin-top: auto)
+         - .progress's normal margin-top: auto is overridden to 4px, so
+           it no longer competes for slack; lyrics drops to just above.
+         - .content's flex gap of 6px stacks with that 4px → ~10px
+           between the bottom lyric line and the progress bar. */
     .root.eq-as-bg .lyrics {
-      position: absolute;
-      top: 50%;
-      left: 0;
-      right: 0;
-      transform: translateY(-50%);
+      flex: 0 0 auto;
       height: calc(5 * 1.5em + 5 * 8px);
-      flex: 0 0 auto;       /* irrelevant once absolute, kept for fallback */
-      margin: 0;
+      margin-top: auto;
+    }
+    .root.eq-as-bg .progress {
+      margin-top: 4px;
     }
     /* Top/bottom fade overlays were using a hardcoded #0a0a0c page-bg
        color, which doubled as a darker rectangle on top of the album-art
