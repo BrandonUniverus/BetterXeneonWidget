@@ -65,6 +65,7 @@ public sealed class SpotifyService
     private string? _pendingState;
 
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
+    private DateTimeOffset _tokenBlockedUntil = DateTimeOffset.MinValue;
 
     public SpotifyService(
         SpotifyTokenStore store,
@@ -77,6 +78,7 @@ public sealed class SpotifyService
         // Env var beats appsettings — easier for dev without editing JSON.
         _clientId = Environment.GetEnvironmentVariable("BETTERXENEON_SPOTIFY_CLIENT_ID")
             ?? options.Value.ClientId;
+        LoadRateLimitCacheIfNeeded();
     }
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_clientId);
@@ -88,6 +90,7 @@ public sealed class SpotifyService
     public bool BeginAuth()
     {
         if (!IsConfigured) return false;
+        if (DateTimeOffset.UtcNow < _tokenBlockedUntil) return false;
 
         var verifier = GenerateRandomToken(32);
         var challenge = ComputePkceChallenge(verifier);
@@ -155,7 +158,17 @@ public sealed class SpotifyService
         try
         {
             var response = await _http.PostAsync(TokenUrl, form);
-            if (!response.IsSuccessStatusCode) return false;
+            if (!response.IsSuccessStatusCode)
+            {
+                if (response.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
+                {
+                    _tokenBlockedUntil = DateTimeOffset.UtcNow
+                        + GetRetryAfterDelay(response)
+                        + TimeSpan.FromMinutes(1);
+                    SaveRateLimitCache();
+                }
+                return false;
+            }
             token = await response.Content.ReadFromJsonAsync<TokenResponse>();
         }
         catch
@@ -173,6 +186,8 @@ public sealed class SpotifyService
             ExpiresAtUtc: DateTimeOffset.UtcNow.AddSeconds(token.ExpiresIn - 60),
             Scope: token.Scope ?? Scopes,
             DisplayName: displayName));
+        _tokenBlockedUntil = DateTimeOffset.MinValue;
+        SaveRateLimitCache();
 
         return true;
     }
@@ -184,10 +199,9 @@ public sealed class SpotifyService
         return new SpotifyStatusDto(true, tokens.DisplayName);
     }
 
-    // Same Retry-After cooldown pattern as playlists, but for /me/player.
-    // Without this, a 429 on this endpoint perpetuates because we re-poll
-    // every 1.5s — Spotify keeps the rolling window open and the entire
-    // account stays locked.
+    // Same Retry-After cooldown pattern as playlists, but for player APIs.
+    // Without this, a 429 perpetuates because every widget instance can keep
+    // re-firing local endpoints while Spotify's rolling window is still hot.
     private DateTimeOffset _playbackBlockedUntil = DateTimeOffset.MinValue;
 
     public async Task<SpotifyPlaybackDto> GetPlaybackAsync()
@@ -224,7 +238,7 @@ public sealed class SpotifyService
                     ? string.Join(", ", body.Item.Artists.Select(a => a.Name))
                     : string.Empty,
                 Album: body.Item.Album?.Name ?? string.Empty,
-                AlbumArtUrl: PickImage(body.Item.Album?.Images),
+                AlbumArtUrl: PickImage(body.Item.Album?.Images, preferLargest: true),
                 DeviceName: body.Device?.Name ?? string.Empty,
                 DeviceType: body.Device?.Type ?? string.Empty,
                 ProgressMs: body.ProgressMs ?? 0,
@@ -247,6 +261,8 @@ public sealed class SpotifyService
 
     private async Task<bool> TransportAsync(string action, HttpMethod method)
     {
+        if (DateTimeOffset.UtcNow < _playbackBlockedUntil) return false;
+
         var token = await GetValidAccessTokenAsync();
         if (token is null) return false;
         try
@@ -261,6 +277,11 @@ public sealed class SpotifyService
                 req.Content = new StringContent("", Encoding.UTF8, "application/json");
             }
             using var res = await _http.SendAsync(req);
+            if (res.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
+            {
+                ApplyPlaybackBackoff(res);
+                return false;
+            }
             return res.IsSuccessStatusCode;
         }
         catch
@@ -271,42 +292,132 @@ public sealed class SpotifyService
 
     public void Disconnect() => _store.Clear();
 
-    public async Task<IReadOnlyList<SpotifyQueueItemDto>> GetQueueAsync()
+    /// <summary>
+    /// Lists every Spotify Connect device Spotify's cloud has registered for
+    /// the current account. Diagnostic — when /me/player returns no session,
+    /// this tells us whether the desktop client is even known to the cloud.
+    /// </summary>
+    public async Task<IReadOnlyList<SpotifyDeviceDto>> GetDevicesAsync()
     {
-        if (DateTimeOffset.UtcNow < _playbackBlockedUntil) return Array.Empty<SpotifyQueueItemDto>();
+        if (DateTimeOffset.UtcNow < _playbackBlockedUntil) return Array.Empty<SpotifyDeviceDto>();
 
         var token = await GetValidAccessTokenAsync();
-        if (token is null) return Array.Empty<SpotifyQueueItemDto>();
-
+        if (token is null) return Array.Empty<SpotifyDeviceDto>();
         try
         {
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/me/player/devices");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var res = await _http.SendAsync(req);
+            if (res.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
+            {
+                ApplyPlaybackBackoff(res);
+                return Array.Empty<SpotifyDeviceDto>();
+            }
+            if (!res.IsSuccessStatusCode) return Array.Empty<SpotifyDeviceDto>();
+            await using var stream = await res.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(stream);
+            if (!doc.RootElement.TryGetProperty("devices", out var devicesEl)
+                || devicesEl.ValueKind != JsonValueKind.Array) return Array.Empty<SpotifyDeviceDto>();
+            var result = new List<SpotifyDeviceDto>(devicesEl.GetArrayLength());
+            foreach (var d in devicesEl.EnumerateArray())
+            {
+                var id = d.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+                var name = d.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+                var type = d.TryGetProperty("type", out var tEl) ? tEl.GetString() ?? "" : "";
+                var active = d.TryGetProperty("is_active", out var aEl) && aEl.ValueKind == JsonValueKind.True;
+                var restricted = d.TryGetProperty("is_restricted", out var rEl) && rEl.ValueKind == JsonValueKind.True;
+                result.Add(new SpotifyDeviceDto(id ?? "", name, type, active, restricted));
+            }
+            return result;
+        }
+        catch
+        {
+            return Array.Empty<SpotifyDeviceDto>();
+        }
+    }
+
+    /// <summary>
+    /// Force-activates a Spotify Connect device by transferring playback to
+    /// it. Used to wake up the desktop client when it's playing locally but
+    /// not currently the cloud-visible active device. play=false matches
+    /// Spotify's "keep current state" semantics so we don't accidentally
+    /// start playing when the user had paused.
+    /// </summary>
+    public async Task<bool> TransferPlaybackAsync(string deviceId, bool play = false)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId)) return false;
+        if (DateTimeOffset.UtcNow < _playbackBlockedUntil) return false;
+
+        var token = await GetValidAccessTokenAsync();
+        if (token is null) return false;
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Put, $"{ApiBase}/me/player");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            var body = JsonSerializer.Serialize(new { device_ids = new[] { deviceId }, play });
+            req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var res = await _http.SendAsync(req);
+            if (res.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
+            {
+                ApplyPlaybackBackoff(res);
+                return false;
+            }
+            return res.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public async Task<IReadOnlyList<SpotifyQueueItemDto>> GetQueueAsync()
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now < _playbackBlockedUntil) return _cachedQueue;
+        if (now - _cachedQueueAt < QueueCacheLifetime) return _cachedQueue;
+
+        await _queueLock.WaitAsync();
+        try
+        {
+            now = DateTimeOffset.UtcNow;
+            if (now < _playbackBlockedUntil) return _cachedQueue;
+            if (now - _cachedQueueAt < QueueCacheLifetime) return _cachedQueue;
+
+            var token = await GetValidAccessTokenAsync();
+            if (token is null) return _cachedQueue;
+
             using var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/me/player/queue");
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using var res = await _http.SendAsync(req);
             if (res.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
             {
                 ApplyPlaybackBackoff(res);
-                return Array.Empty<SpotifyQueueItemDto>();
+                return _cachedQueue;
             }
-            if (!res.IsSuccessStatusCode) return Array.Empty<SpotifyQueueItemDto>();
+            if (!res.IsSuccessStatusCode) return _cachedQueue;
             var body = await res.Content.ReadFromJsonAsync<SpotifyQueueResponse>();
-            if (body?.Queue is null) return Array.Empty<SpotifyQueueItemDto>();
+            if (body?.Queue is null) return _cachedQueue;
 
-            return body.Queue.Select(MapTrack).ToArray();
+            var result = body.Queue.Select(MapTrack).ToArray();
+            _cachedQueue = result;
+            _cachedQueueAt = DateTimeOffset.UtcNow;
+            return result;
         }
         catch
         {
-            return Array.Empty<SpotifyQueueItemDto>();
+            return _cachedQueue;
+        }
+        finally
+        {
+            _queueLock.Release();
         }
     }
 
     private void ApplyPlaybackBackoff(HttpResponseMessage res)
     {
-        var retry = res.Headers.RetryAfter?.Delta
-                  ?? (res.Headers.RetryAfter?.Date is { } d ? d - DateTimeOffset.UtcNow : (TimeSpan?)null)
-                  ?? DefaultRateLimitBackoff;
-        if (retry < TimeSpan.FromSeconds(15)) retry = TimeSpan.FromSeconds(15);
+        var retry = GetRetryAfterDelay(res);
         _playbackBlockedUntil = DateTimeOffset.UtcNow + retry + TimeSpan.FromMinutes(1);
+        SaveRateLimitCache();
     }
 
     public async Task<IReadOnlyList<SpotifyQueueItemDto>> GetRecentlyPlayedAsync(int limit = 20)
@@ -358,6 +469,8 @@ public sealed class SpotifyService
     public async Task<bool> PlayTrackAsync(string trackId)
     {
         if (string.IsNullOrWhiteSpace(trackId)) return false;
+        if (DateTimeOffset.UtcNow < _playbackBlockedUntil) return false;
+
         var token = await GetValidAccessTokenAsync();
         if (token is null) return false;
 
@@ -368,6 +481,11 @@ public sealed class SpotifyService
             using var stateReq = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/me/player");
             stateReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using var stateRes = await _http.SendAsync(stateReq);
+            if (stateRes.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
+            {
+                ApplyPlaybackBackoff(stateRes);
+                return false;
+            }
             if (stateRes.IsSuccessStatusCode)
             {
                 await using var stream = await stateRes.Content.ReadAsStreamAsync();
@@ -412,6 +530,8 @@ public sealed class SpotifyService
 
     private async Task<bool> PlayCoreAsync(string jsonBody)
     {
+        if (DateTimeOffset.UtcNow < _playbackBlockedUntil) return false;
+
         var token = await GetValidAccessTokenAsync();
         if (token is null) return false;
 
@@ -421,6 +541,11 @@ public sealed class SpotifyService
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
             using var res = await _http.SendAsync(req);
+            if (res.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
+            {
+                ApplyPlaybackBackoff(res);
+                return false;
+            }
             // 204 = success; 404 = no active device; 403 = restriction (e.g. free tier)
             return res.IsSuccessStatusCode;
         }
@@ -444,14 +569,26 @@ public sealed class SpotifyService
     private DateTimeOffset _cachedPlaylistsAt = DateTimeOffset.MinValue;
     private DateTimeOffset _playlistsBlockedUntil = DateTimeOffset.MinValue;
     private static readonly TimeSpan PlaylistsCacheLifetime = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan QueueCacheLifetime = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan DefaultRateLimitBackoff = TimeSpan.FromMinutes(2);
+    private readonly SemaphoreSlim _playlistsLock = new(1, 1);
+    private readonly SemaphoreSlim _queueLock = new(1, 1);
+    private IReadOnlyList<SpotifyQueueItemDto> _cachedQueue = Array.Empty<SpotifyQueueItemDto>();
+    private DateTimeOffset _cachedQueueAt = DateTimeOffset.MinValue;
     private string? _playlistsCachePath;
+    private string? _rateLimitsCachePath;
     private bool _playlistsCacheLoaded;
+    private bool _rateLimitsCacheLoaded;
 
     private string PlaylistsCachePath => _playlistsCachePath ??= Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "BetterXeneonWidget",
         "playlists-cache.json");
+
+    private string RateLimitsCachePath => _rateLimitsCachePath ??= Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "BetterXeneonWidget",
+        "spotify-rate-limits.json");
 
     private void LoadPlaylistsCacheIfNeeded()
     {
@@ -463,7 +600,7 @@ public sealed class SpotifyService
             var json = File.ReadAllText(PlaylistsCachePath);
             var snap = JsonSerializer.Deserialize<PlaylistsCacheSnapshot>(json);
             if (snap is null) return;
-            if (snap.Items is { Count: > 0 })
+            if (snap.Items is not null)
             {
                 _cachedPlaylists = snap.Items;
                 _cachedPlaylistsAt = snap.SavedAt;
@@ -471,7 +608,10 @@ public sealed class SpotifyService
             // Restore the rate-limit window. Without this, restarting the
             // host immediately after Spotify ban-hammered us would re-fire
             // the call and extend the lockout.
-            _playlistsBlockedUntil = snap.BlockedUntil;
+            if (snap.BlockedUntil > _playlistsBlockedUntil)
+            {
+                _playlistsBlockedUntil = snap.BlockedUntil;
+            }
         }
         catch { /* best effort */ }
     }
@@ -499,6 +639,55 @@ public sealed class SpotifyService
         public DateTimeOffset BlockedUntil { get; set; }
     }
 
+    private void LoadRateLimitCacheIfNeeded()
+    {
+        if (_rateLimitsCacheLoaded) return;
+        _rateLimitsCacheLoaded = true;
+        try
+        {
+            if (!File.Exists(RateLimitsCachePath)) return;
+            var json = File.ReadAllText(RateLimitsCachePath);
+            var snap = JsonSerializer.Deserialize<RateLimitCacheSnapshot>(json);
+            if (snap is null) return;
+            if (snap.PlaybackBlockedUntil > _playbackBlockedUntil)
+            {
+                _playbackBlockedUntil = snap.PlaybackBlockedUntil;
+            }
+            if (snap.PlaylistsBlockedUntil > _playlistsBlockedUntil)
+            {
+                _playlistsBlockedUntil = snap.PlaylistsBlockedUntil;
+            }
+            if (snap.TokenBlockedUntil > _tokenBlockedUntil)
+            {
+                _tokenBlockedUntil = snap.TokenBlockedUntil;
+            }
+        }
+        catch { /* best effort */ }
+    }
+
+    private void SaveRateLimitCache()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(RateLimitsCachePath)!);
+            var snap = new RateLimitCacheSnapshot
+            {
+                PlaybackBlockedUntil = _playbackBlockedUntil,
+                PlaylistsBlockedUntil = _playlistsBlockedUntil,
+                TokenBlockedUntil = _tokenBlockedUntil,
+            };
+            File.WriteAllText(RateLimitsCachePath, JsonSerializer.Serialize(snap));
+        }
+        catch { /* best effort */ }
+    }
+
+    private sealed class RateLimitCacheSnapshot
+    {
+        public DateTimeOffset PlaybackBlockedUntil { get; set; }
+        public DateTimeOffset PlaylistsBlockedUntil { get; set; }
+        public DateTimeOffset TokenBlockedUntil { get; set; }
+    }
+
     public async Task<IReadOnlyList<SpotifyPlaylistDto>> GetPlaylistsAsync()
     {
         LoadPlaylistsCacheIfNeeded();
@@ -510,7 +699,7 @@ public sealed class SpotifyService
         //   - Spotify cool-down active — serve whatever we have, even if
         //     past TTL. Spotify's Retry-After can be hours; re-fetching
         //     during the window just extends the lockout.
-        bool freshEnough = _cachedPlaylists.Count > 0
+        bool freshEnough = _cachedPlaylistsAt != DateTimeOffset.MinValue
             && now - _cachedPlaylistsAt < PlaylistsCacheLifetime;
         bool inCooldown = now < _playlistsBlockedUntil;
         if (freshEnough || inCooldown)
@@ -518,11 +707,21 @@ public sealed class SpotifyService
             return _cachedPlaylists;
         }
 
-        var token = await GetValidAccessTokenAsync();
-        if (token is null) return _cachedPlaylists;
-
+        await _playlistsLock.WaitAsync();
         try
         {
+            now = DateTimeOffset.UtcNow;
+            freshEnough = _cachedPlaylistsAt != DateTimeOffset.MinValue
+                && now - _cachedPlaylistsAt < PlaylistsCacheLifetime;
+            inCooldown = now < _playlistsBlockedUntil;
+            if (freshEnough || inCooldown)
+            {
+                return _cachedPlaylists;
+            }
+
+            var token = await GetValidAccessTokenAsync();
+            if (token is null) return _cachedPlaylists;
+
             using var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/me/playlists?limit=20");
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using var res = await _http.SendAsync(req);
@@ -532,11 +731,9 @@ public sealed class SpotifyService
                 // Spotify sends Retry-After (seconds, sometimes hours when
                 // they really want us to back off). Honor it + 1 min pad so
                 // we don't fire the call right as the window closes.
-                var retry = res.Headers.RetryAfter?.Delta
-                          ?? (res.Headers.RetryAfter?.Date is { } d ? d - DateTimeOffset.UtcNow : (TimeSpan?)null)
-                          ?? DefaultRateLimitBackoff;
-                if (retry < TimeSpan.FromSeconds(15)) retry = TimeSpan.FromSeconds(15);
+                var retry = GetRetryAfterDelay(res);
                 _playlistsBlockedUntil = DateTimeOffset.UtcNow + retry + TimeSpan.FromMinutes(1);
+                SaveRateLimitCache();
                 SavePlaylistsCache(); // persist the cool-down window too
                 return _cachedPlaylists;
             }
@@ -545,6 +742,7 @@ public sealed class SpotifyService
             if (!res.IsSuccessStatusCode)
             {
                 _playlistsBlockedUntil = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+                SaveRateLimitCache();
                 return _cachedPlaylists;
             }
 
@@ -603,23 +801,21 @@ public sealed class SpotifyService
                 }
             }
 
-            // Only commit to cache if we actually got something. Empty
-            // results from a successful 200 are unusual (account with no
-            // playlists), but we'd rather keep the previous list than
-            // overwrite it with empty.
-            if (result.Count > 0)
-            {
-                _cachedPlaylists = result;
-                _cachedPlaylistsAt = DateTimeOffset.UtcNow;
-                SavePlaylistsCache();
-            }
-            return result.Count > 0 ? result : _cachedPlaylists;
+            _cachedPlaylists = result;
+            _cachedPlaylistsAt = DateTimeOffset.UtcNow;
+            SavePlaylistsCache();
+            return result;
         }
         catch
         {
             // Network error — short backoff (different signal than 429).
             _playlistsBlockedUntil = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+            SaveRateLimitCache();
             return _cachedPlaylists;
+        }
+        finally
+        {
+            _playlistsLock.Release();
         }
     }
 
@@ -631,9 +827,16 @@ public sealed class SpotifyService
         Artist: t.Artists is { Count: > 0 } ? string.Join(", ", t.Artists.Select(a => a.Name)) : string.Empty,
         AlbumArtUrl: PickImage(t.Album?.Images));
 
-    private static string? PickImage(List<SpotifyImage>? images)
+    private static string? PickImage(List<SpotifyImage>? images, bool preferLargest = false)
     {
         if (images is null || images.Count == 0) return null;
+        if (preferLargest)
+        {
+            return images
+                .Where(i => i.Width.HasValue)
+                .OrderByDescending(i => i.Width)
+                .FirstOrDefault()?.Url ?? images.FirstOrDefault()?.Url;
+        }
         // Prefer ~64-300 px thumbnails to keep widget render cheap. Spotify
         // returns largest first; pick the smallest >= 64 or the smallest overall.
         var smallEnough = images
@@ -665,6 +868,7 @@ public sealed class SpotifyService
         var tokens = _store.Read();
         if (tokens is null) return null;
         if (DateTimeOffset.UtcNow < tokens.ExpiresAtUtc) return tokens.AccessToken;
+        if (DateTimeOffset.UtcNow < _tokenBlockedUntil) return null;
 
         // Token expired — serialize refreshes so concurrent callers don't
         // burn through the refresh-token rate limit racing each other.
@@ -674,6 +878,7 @@ public sealed class SpotifyService
             tokens = _store.Read();
             if (tokens is null) return null;
             if (DateTimeOffset.UtcNow < tokens.ExpiresAtUtc) return tokens.AccessToken;
+            if (DateTimeOffset.UtcNow < _tokenBlockedUntil) return null;
 
             var refreshed = await RefreshAsync(tokens);
             return refreshed?.AccessToken;
@@ -701,6 +906,13 @@ public sealed class SpotifyService
             var response = await _http.PostAsync(TokenUrl, form);
             if (!response.IsSuccessStatusCode)
             {
+                if (response.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
+                {
+                    _tokenBlockedUntil = DateTimeOffset.UtcNow
+                        + GetRetryAfterDelay(response)
+                        + TimeSpan.FromMinutes(1);
+                    SaveRateLimitCache();
+                }
                 // 400/401 here means the refresh token is dead — purge so the
                 // widget surfaces a "reconnect" affordance instead of looping.
                 if ((int)response.StatusCode is 400 or 401) _store.Clear();
@@ -726,6 +938,14 @@ public sealed class SpotifyService
 
         _store.Save(next);
         return next;
+    }
+
+    private static TimeSpan GetRetryAfterDelay(HttpResponseMessage res)
+    {
+        var retry = res.Headers.RetryAfter?.Delta
+            ?? (res.Headers.RetryAfter?.Date is { } d ? d - DateTimeOffset.UtcNow : (TimeSpan?)null)
+            ?? DefaultRateLimitBackoff;
+        return retry < TimeSpan.FromSeconds(15) ? TimeSpan.FromSeconds(15) : retry;
     }
 
     private static string GenerateRandomToken(int byteCount)

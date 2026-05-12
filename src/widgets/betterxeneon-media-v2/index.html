@@ -1,0 +1,3596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tr('Better Media v2')</title>
+  <link rel="icon" type="image/svg+xml" href="resources/icon.svg">
+
+  <!-- All user-facing settings live INSIDE the widget now (Settings
+       button in the top-right header → opens an in-widget settings view).
+       Persistence is via the host at GET/POST /api/widget/settings, which
+       stores values in %APPDATA%\BetterXeneonWidget\config.json. The iCUE
+       settings panel deliberately exposes nothing for this widget — one
+       source of truth keeps the UX coherent and lets us add new settings
+       without re-registering iCUE meta tags. -->
+
+  <!-- iCUE requires AT LEAST ONE x-icue-property to import the widget
+       (an empty groups script or no properties at all is rejected as
+       "Unsupported or corrupted file" even when icueEvents is declared).
+       Ship a single hidden no-op property + dummy group purely to
+       satisfy the importer. The property's value is never read by the
+       widget — it's just there to keep iCUE happy. -->
+  <meta name="x-icue-property" content="_icuePlaceholder"
+        data-label="tr('(internal)')"
+        data-type="switch"
+        data-default="false">
+  <script id="x-icue-groups" type="application/json">
+    [{ "title": "tr('(internal)')", "properties": ["_icuePlaceholder"] }]
+  </script>
+
+  <style>
+    /* ---- Theme system ----------------------------------------------------
+       One iCUE option ("Theme") drives EVERY accent color across the
+       widget — play button, source chip, lyric current-line, progress
+       bar fill, queue / playlist actives, pulse indicator, list rows.
+       That keeps the whole widget coherent regardless of which preset
+       is active.
+
+       Each theme defines four custom properties:
+         --theme-accent       hex form, used directly as fill/color
+         --theme-accent-rgb   comma-separated RGB, used in rgba(...) for
+                              low-opacity hovers / dims (CSS vars can't
+                              be modulated by alpha without color-mix or
+                              this split-rgb trick)
+         --theme-accent-fg    text color that reads against --theme-accent
+                              (the play button glyph, etc.)
+         --theme-accent-dim   darker shade for inactive / muted states
+
+       Defaults below = Spotify green (the previous hardcoded value).
+       The .theme-* class rules override these. The album theme is
+       special: it stays on the defaults but JS overrides the
+       properties inline based on the sampled cover color, so it tracks
+       the current track automatically. */
+    :root {
+      --theme-accent: #1db954;
+      --theme-accent-rgb: 29, 185, 84;
+      --theme-accent-fg: #08130c;
+      --theme-accent-dim: #14823c;
+    }
+    .theme-rainbow {
+      /* Rainbow palette cycles, so we pick a single accent that doesn't
+         clash with any spoke: a saturated hot-pink reads as neutral
+         against the rest of the rainbow wheel. */
+      --theme-accent: #ff3b6b;
+      --theme-accent-rgb: 255, 59, 107;
+      --theme-accent-fg: #1a0008;
+      --theme-accent-dim: #7f1d36;
+    }
+    .theme-neon {
+      --theme-accent: #00e5ff;
+      --theme-accent-rgb: 0, 229, 255;
+      --theme-accent-fg: #001114;
+      --theme-accent-dim: #007a85;
+    }
+    .theme-sunset {
+      --theme-accent: #ff5e87;
+      --theme-accent-rgb: 255, 94, 135;
+      --theme-accent-fg: #1f0008;
+      --theme-accent-dim: #8e3144;
+    }
+    .theme-aurora {
+      /* The look from the reference screenshot you preferred. */
+      --theme-accent: #3ce0ff;
+      --theme-accent-rgb: 60, 224, 255;
+      --theme-accent-fg: #002028;
+      --theme-accent-dim: #1a6f80;
+    }
+    .theme-mono {
+      --theme-accent: #ffffff;
+      --theme-accent-rgb: 255, 255, 255;
+      --theme-accent-fg: #000000;
+      --theme-accent-dim: #666666;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #0a0a0c;
+      color: #fff;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Layout switches between two flex orientations based on aspect ratio.
+       The classes (.size-wide / .size-vertical) are toggled by JS via a
+       ResizeObserver on .root — iCUE's QtWebEngine doesn't reliably fire
+       window.resize when the cell changes on the dashboard, so we observe
+       the element directly. Width-based breakpoints fail on Xeneon Edge
+       because Small horizontal (840×344) and Medium horizontal (840×696)
+       share width 840 with very different shapes — aspect ratio cleanly
+       separates "wide strip" from "square/tall". */
+    .root {
+      position: relative;
+      isolation: isolate;       /* contain the .art-bg negative z-index */
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      padding: 16px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      overflow: hidden;         /* clip the bg blur halo to the cell */
+    }
+
+    /* FLICKER TEST: re-introducing the album-art bg layer the way it
+       was in phase 8 — heavy filter chain (blur + brightness + saturate)
+       on an <img> whose src mirrors the foreground album art. If the
+       random flicker on the Edge comes back here, this is confirmed
+       the cause. Always shown (no iCUE option toggle) to isolate the
+       layer itself from the option-pipeline plumbing.
+       The .show class is toggled by setArt based on hasArt — when
+       there's no track, the bg fades out instead of showing a broken
+       image. */
+    .art-bg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: blur(36px) brightness(0.45) saturate(1.15);
+      pointer-events: none;
+      z-index: -1;
+      opacity: 0;
+      transition: opacity 350ms ease;
+    }
+    .art-bg.show { opacity: 0.95; }
+    .root.size-wide {
+      flex-direction: row;
+      justify-content: flex-start;
+    }
+    .root.size-vertical {
+      flex-direction: column;
+      justify-content: center;
+      text-align: center;
+    }
+
+    /* Art — same element, scales differently per layout. */
+    .art {
+      flex: 0 0 auto;
+      aspect-ratio: 1 / 1;
+      border-radius: 10px;
+      object-fit: cover;
+      background: #1c1c22;
+      display: block;
+    }
+    .root.size-wide .art {
+      height: 100%;
+      max-height: 100%;
+      width: auto;
+    }
+    .root.size-vertical .art {
+      width: min(28vmin, 140px);
+    }
+    .art.empty { visibility: hidden; }
+
+    /* Content column on the right in wide mode, full width in vertical.
+       flex:1 1 0 lets the lyrics inside it actually take available space
+       in wide mode without overflowing.
+       justify-content: flex-start anchors title/artist/source at the top.
+       The bottom group (.progress + .transport + .phase) is pushed to the
+       bottom by margin-top: auto on .progress. When lyrics ARE rendered,
+       they fill the gap as flex:1; when they're not, .progress's auto
+       margin still keeps the bottom row pinned down rather than letting
+       everything collapse to the middle. */
+    .content {
+      flex: 1 1 0;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-self: stretch;
+      justify-content: flex-start;
+    }
+    .root.size-vertical .content {
+      align-items: center;
+    }
+
+    .text {
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 0 0 auto;
+    }
+    .title {
+      font-size: clamp(16px, 3.5vmin, 26px);
+      font-weight: 700;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .artist {
+      font-size: clamp(12px, 2.4vmin, 18px);
+      font-weight: 500;
+      opacity: 0.75;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* Source line under artist — shows "Spotify · Album" when SMTC reports
+       Spotify, hidden otherwise (no flex room reserved when empty). */
+    .source {
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      opacity: 0.6;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      margin-top: 2px;
+    }
+    .root.size-vertical .source { justify-content: center; }
+    .source.empty { display: none; }
+    .source .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--theme-accent);
+      flex-shrink: 0;
+    }
+    .source .name {
+      font-weight: 700;
+      color: var(--theme-accent);
+    }
+    .source .album {
+      opacity: 0.85;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    /* Up-next chip + queue button live at the top-right of the header
+       in wide mode, beside the title. In vertical mode they hide
+       (the centered narrow column doesn't have room). */
+    .header-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+    }
+    .root.size-vertical .header-row { flex-direction: column; align-items: center; }
+    .text { flex: 1 1 auto; min-width: 0; }
+    .header-right {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 50%;
+    }
+    .root.size-vertical .header-right { display: none; }
+    .upnext-chip {
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      opacity: 0.6;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .upnext-chip.empty { display: none; }
+    .upnext-chip .label {
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--theme-accent);
+      margin-right: 6px;
+    }
+    /* Top-right control buttons (queue + settings). Sized + styled to
+       match the bottom .t-btn transport row (same height clamp, same
+       dark surface, same white icon, same hover treatment) — just
+       constrained to width = height so they stay circles (border-radius
+       50%). No left/right padding; the icon centers automatically via
+       flex. Active state still tints to theme-accent like the play
+       button does, so the user can see which sub-view they're in. */
+    .queue-btn {
+      flex: 0 0 auto;
+      height: clamp(44px, 7.5vmin, 60px);
+      width: clamp(44px, 7.5vmin, 60px);
+      border-radius: 50%;
+      border: none;
+      background: #1c1c22;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 80ms, color 80ms;
+    }
+    .queue-btn:hover, .queue-btn:active { background: #2a2a32; }
+    .queue-btn.active {
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);
+    }
+    .queue-btn.hidden { display: none; }
+    .queue-btn svg {
+      width: 40%;
+      max-width: 24px;
+      max-height: 24px;
+      pointer-events: none;
+    }
+
+    /* List view (queue or playlists) — fills the same slot the lyrics
+       container does in the content column. Flex column so children
+       can use margin-top: auto to anchor themselves (in particular,
+       the empty-state message in the queue view sits just above the
+       progress bar instead of floating in the middle). */
+    .list-view {
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      font-size: clamp(12px, 2.2vmin, 16px);
+      display: flex;
+      flex-direction: column;
+    }
+    /* Empty queue / no-playlists message: anchor at the bottom of the
+       list-view so it sits right above the progress bar. */
+    .list-view .list-empty {
+      margin-top: auto;
+      padding: 12px;
+    }
+    .list-view::-webkit-scrollbar { width: 6px; }
+    .list-view::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
+    .list-view.hidden { display: none; }
+    .list-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 8px;
+      border: none;
+      background: none;
+      color: inherit;
+      width: 100%;
+      text-align: left;
+      cursor: pointer;
+      touch-action: manipulation;
+      border-radius: 6px;
+      transition: background 80ms;
+    }
+    .list-row:hover, .list-row:active { background: rgba(255, 255, 255, 0.06); }
+    .list-row .lr-art {
+      width: 36px;
+      height: 36px;
+      border-radius: 4px;
+      object-fit: cover;
+      background: rgba(255, 255, 255, 0.06);
+      flex: 0 0 auto;
+    }
+    .list-row .lr-meta {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .list-row .lr-name {
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .list-row .lr-sub {
+      font-size: 11px;
+      opacity: 0.55;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .list-empty {
+      /* Padding is overridden when inside .list-view (the auto-margin
+         path keeps the message close to the progress bar). */
+      padding: 30px 12px;
+      text-align: center;
+      font-size: 12px;
+      opacity: 0.55;
+    }
+
+    /* --- Settings view controls -----------------------------------------
+       Tabbed panel rendered inside listView when currentView === 'settings'.
+       Tab pills at top, then rows of label + control (switch / segmented /
+       slider) for the active tab only. Font sizes bumped ~4px across the
+       board so the touchscreen reads at arm's length. */
+
+    /* Tab pill bar */
+    .settings-tabs {
+      display: flex;
+      gap: 6px;
+      margin: 0 0 14px;
+    }
+    .settings-tab {
+      flex: 1 1 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 9px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.55);
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 150ms, color 150ms, border-color 150ms;
+    }
+    .settings-tab svg {
+      width: 16px;
+      height: 16px;
+      pointer-events: none;
+    }
+    .settings-tab.active {
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);
+      border-color: var(--theme-accent);
+    }
+
+    .settings-section {
+      margin-bottom: 6px;
+    }
+    .settings-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 8px;
+      border-radius: 6px;
+    }
+    .settings-row .settings-meta {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .settings-row .settings-name {
+      font-weight: 600;
+      font-size: 17px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .settings-row .settings-sub {
+      font-size: 14px;
+      opacity: 0.55;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 2px;
+    }
+
+    /* Pill toggle — black pill, accent-colored thumb when ON, dim white
+       thumb when OFF. Bigger (54×30) for the touchscreen target. */
+    .settings-toggle {
+      flex: 0 0 auto;
+      width: 54px;
+      height: 30px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: #000;
+      position: relative;
+      cursor: pointer;
+      padding: 0;
+      touch-action: manipulation;
+      transition: border-color 180ms;
+    }
+    .settings-toggle[data-on="1"] {
+      border-color: var(--theme-accent);
+    }
+    .settings-toggle-thumb {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.45);
+      transition: transform 180ms, background 180ms;
+    }
+    .settings-toggle[data-on="1"] .settings-toggle-thumb {
+      transform: translateX(24px);
+      background: var(--theme-accent);
+    }
+
+    /* Segmented control — row of buttons, one active. */
+    .settings-row-segment { flex-direction: column; align-items: stretch; }
+    .settings-row-segment .settings-meta { margin-bottom: 8px; }
+    .settings-seg {
+      display: flex;
+      gap: 3px;
+      background: rgba(0, 0, 0, 0.55);
+      padding: 4px;
+      border-radius: 8px;
+    }
+    .settings-seg button {
+      flex: 1 1 0;
+      min-width: 0;
+      padding: 8px 4px;
+      border: 1px solid var(--theme-accent);
+      background: transparent;
+      color: rgba(255, 255, 255, 0.78);
+      cursor: pointer;
+      border-radius: 6px;
+      font-size: 15px;
+      font-weight: 600;
+      box-sizing: border-box;
+      touch-action: manipulation;
+      transition: background 150ms, color 150ms;
+    }
+    .settings-seg button.active {
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);
+    }
+    .settings-seg button:not(.active):hover {
+      background: rgba(var(--theme-accent-rgb), 0.12);
+    }
+
+    /* Slider — native range, themed. */
+    .settings-row-slider { flex-direction: column; align-items: stretch; }
+    .settings-row-slider .settings-meta {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+    .settings-row-slider .settings-value {
+      font-size: 16px;
+      font-variant-numeric: tabular-nums;
+      color: var(--theme-accent);
+      font-weight: 700;
+      flex: 0 0 auto;
+    }
+    .settings-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    .settings-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--theme-accent);
+      cursor: pointer;
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+
+    /* List-view header — title for the playlists / audio-source /
+       settings sub-views. No border-bottom on purpose: the themed
+       horizon line above is already the visual divider, and stacking
+       a second 1px line just below it reads as "two horizons". */
+    .list-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 2px 4px 8px;
+      margin-bottom: 4px;
+    }
+    .list-back {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(var(--theme-accent-rgb), 0.15);
+      border: none;
+      color: var(--theme-accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 6px;
+      touch-action: manipulation;
+      transition: background 80ms;
+    }
+    .list-back:hover, .list-back:active { background: rgba(var(--theme-accent-rgb), 0.3); }
+    .list-back svg { width: 14px; height: 14px; pointer-events: none; }
+    .list-header .lh-title {
+      flex: 1 1 auto;
+      font-size: 13px;
+      font-weight: 600;
+      opacity: 0.85;
+    }
+
+    /* Playlists mode keeps the transport row visible so the lib button
+       (now showing a back arrow — see setLibMode) is reachable. Progress
+       bar + phase line still hide to keep the focus on the list. */
+    .root.playlists-mode .progress,
+    .root.playlists-mode .phase,
+    .root.playlists-mode .header-right { display: none; }
+
+    /* Settings mode hides progress + phase like playlists-mode but
+       KEEPS .header-right visible (so the settings gear button stays
+       reachable for the user to tap-to-dismiss). Hide the up-next chip
+       and queue button inside header-right since their context is gone;
+       only the settings button remains.
+       Also give the .list-view (where the settings UI is rendered) a
+       solid dark backdrop with rounded corners so the album-art / EQ
+       behind doesn't fight the labels for legibility. Scoped to
+       settings-mode only — playlists / queue / audio-source still get
+       the bg art / spectrum showing through. */
+    .root.settings-mode .progress,
+    .root.settings-mode .phase { display: none; }
+    .root.settings-mode .upnext-chip,
+    .root.settings-mode .queue-btn:not(.settings-btn) { display: none; }
+    .root.settings-mode .list-view {
+      background: rgba(0, 0, 0, 0.85);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+
+    /* -- Listening (screensaver) mode --------------------------------------
+       Three sub-modes, gated by the iCUE Listening view dropdown. The
+       always-hide rules below cover album + equalizer; lyrics submode
+       intentionally keeps the bottom bar visible (user preference — they
+       still want playback controls reachable even when ambient lyrics are
+       up). Tap anywhere to exit listening mode entirely. */
+
+    /* Album submode: keep ONLY the centered cover. */
+    .root.listening-album .progress,
+    .root.listening-album .transport,
+    .root.listening-album .phase,
+    .root.listening-album .header-right { display: none; }
+    /* Equalizer submode: keep ONLY the placeholder. */
+    .root.listening-equalizer .progress,
+    .root.listening-equalizer .transport,
+    .root.listening-equalizer .phase,
+    .root.listening-equalizer .header-right { display: none; }
+
+    /* Lyrics submode: no bottom-bar hiding — controls stay reachable. */
+
+    /* Album submode: hide all content, balloon the art to fill. Keep the
+       blurred bg layer — it makes the centered cover feel poster-like. */
+    .root.listening-album .content { display: none; }
+    .root.listening-album {
+      align-items: center;
+      justify-content: center;
+    }
+    .root.listening-album .art {
+      width: min(80vmin, 80vh, 80vw);
+      height: min(80vmin, 80vh, 80vw);
+      max-width: 90%;
+      max-height: 90%;
+    }
+    /* When there's no art, the placeholder shouldn't squeeze the layout. */
+    .root.listening-album .art.empty { visibility: visible; opacity: 0.2; }
+
+    /* Equalizer submode: real-time spectrum bars via WASAPI loopback on
+       the host. The visualizer is always in the DOM; CSS classes flip its
+       visibility based on listening-equalizer (full-screen) or
+       eq-background (dimmed backdrop). See .eq-visualizer rules below. */
+    .root.listening-equalizer .art,
+    .root.listening-equalizer .art-bg,
+    .root.listening-equalizer .content { display: none; }
+    .root.listening-equalizer {
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* EQ visualizer — full-bleed, hidden by default. Two visible states:
+         .show-full  — listening-equalizer submode, vivid, in front
+         .show-bg    — eqBackground option on, behind the UI on a normal
+                       positive layer. Avoid negative z-index + opacity:
+                       QtWebEngine/iCUE can flash those compositor layers.
+       Mutually exclusive; full takes precedence when both apply. */
+    .eq-visualizer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+      pointer-events: none;
+      overflow: hidden;
+      contain: layout paint style;
+    }
+    .eq-visualizer.show-full {
+      display: block;
+      z-index: 5;
+      opacity: 1;
+    }
+    .eq-visualizer.show-bg {
+      display: block;
+      z-index: 0;
+      opacity: 1;
+      background: #0a0a0c;
+    }
+    .eq-visualizer:not(.eq-mode-bars) .eq-slot { display: none !important; }
+    .eq-slot {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      contain: layout paint style;
+      display: none;
+    }
+    .eq-bar,
+    .eq-reflect,
+    .eq-peak {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      pointer-events: none;
+      will-change: transform;
+    }
+    .eq-bar {
+      transform-origin: bottom center;
+      transition: transform 75ms linear, background 120ms linear;
+    }
+    .eq-reflect {
+      transform-origin: top center;
+      transition: transform 75ms linear, background 120ms linear;
+    }
+    .eq-peak {
+      height: 2px;
+      transition: transform 95ms linear, background 120ms linear, opacity 120ms linear;
+    }
+    .eq-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+      overflow: visible;
+      pointer-events: none;
+      contain: layout paint style;
+    }
+    .eq-visualizer.eq-mode-radial .eq-svg,
+    .eq-visualizer.eq-mode-tunnel .eq-svg { display: block; }
+    .eq-svg line,
+    .eq-svg polygon,
+    .eq-svg circle {
+      vector-effect: non-scaling-stroke;
+      will-change: transform, opacity;
+    }
+    /* When EQ is the background, hide the blurred-cover bg layer always
+       (they'd fight for the same pixels). The foreground cover defaults
+       to hidden too — atmosphere mode replaces the cover entirely — but
+       the eqShowAlbumArt option flips that off and brings the cover back
+       so it sits alongside the bars.
+       The cover stays at full opacity; bar mode moves over to avoid the
+       cover, while radial/tunnel sit behind it as ambient light. */
+    .root.eq-as-bg .art-bg { display: none; }
+    .root.eq-as-bg:not(.eq-show-art) .art { display: none; }
+    .root.eq-as-bg .art,
+    .root.eq-as-bg .content,
+    .root.eq-as-bg .horizon {
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Horizon line — a thin themed accent line that sits just below the
+       header (under the Spotify source chip). The equalizer bars peak
+       exactly at this line at full amplitude — so the horizon doubles
+       as a fixed visual reference AND as the "ceiling" for the
+       spectrum. Always shown when EQ visible / lyrics-or-queue modes,
+       only hidden in listening-equalizer (where content is gone).
+       Z-index 0 (default) keeps it above the bg visualizer but behind the
+       full-screen visualizer, which is appropriate. */
+    .horizon {
+      flex: 0 0 auto;
+      height: 1px;
+      margin: 4px 0;
+      background: linear-gradient(to right,
+        transparent 0%,
+        rgba(var(--theme-accent-rgb), 0.25) 15%,
+        rgba(var(--theme-accent-rgb), 0.45) 50%,
+        rgba(var(--theme-accent-rgb), 0.25) 85%,
+        transparent 100%);
+      pointer-events: none;
+    }
+    .root.listening-equalizer .horizon { display: none; }
+
+    /* Lyrics — fixed-position viewport, inner track translates via transform.
+       (See phase 6.1 commit message for the full rationale on why this
+       avoids the scrollTo preemption flicker.)
+
+       Default behavior: lyrics flex-fill all available space between the
+       header and the bottom bar, so the visible lyric count is whatever
+       fits naturally. This is the right look when there's no competing
+       background visualization.
+
+       When the EQ is the background (.root.eq-as-bg), the lyrics get
+       constrained to exactly 5 lines and vertically centered — see the
+       override below. The 5-line band leaves room above and below for
+       the spectrum to breathe without lyrics covering the bars. */
+    .lyrics {
+      position: relative;
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
+      overflow: hidden;
+      font-size: clamp(15px, 2.8vmin, 22px);
+      line-height: 1.5;
+    }
+    /* EQ-as-background mode: clamp to 3 lines, top edge anchored to
+       the spectrum's centerline (baseY = h*0.5 — the line where bars
+       meet their reflection). Stack order top-to-bottom is previous /
+       current / next via the existing translateY centering math —
+       current line sits at the visual middle of the 3-line viewport.
+       Positioned absolutely against .content so the flex flow of the
+       other items isn't disturbed. */
+    .root.eq-as-bg .content { position: relative; }
+    .root.eq-as-bg .lyrics {
+      position: absolute;
+      top: calc(50% + 6px);
+      left: 0;
+      right: 0;
+      margin: 0;
+      flex: 0 0 auto;
+      height: calc(3 * 1.5em + 3 * 8px);
+    }
+    /* Top/bottom fade overlays were using a hardcoded #0a0a0c page-bg
+       color, which doubled as a darker rectangle on top of the album-art
+       bg layer (visible "double-applied" border around the lyrics). The
+       lyric lines already fade visually via opacity (.35 default,
+       1 current) and overflow:hidden clips lines past the viewport, so
+       the gradient overlays were cosmetic and now actively unhelpful.
+       Removed. */
+    .lyrics .track {
+      transform: translateY(0);
+      transition: transform 350ms cubic-bezier(0.22, 0.61, 0.36, 1);
+      will-change: transform;
+      padding: 50% 0;
+      box-sizing: border-box;
+    }
+    .lyrics .line {
+      padding: 4px 8px;
+      opacity: 0.30;
+      color: #fff;
+      font-weight: 500;
+      text-align: center;       /* always centered — see UX note in commit history */
+      letter-spacing: 0;
+      transition: opacity 250ms, color 250ms, font-size 200ms,
+                  font-weight 200ms, letter-spacing 200ms, text-shadow 250ms;
+    }
+    .lyrics .line.past { opacity: 0.45; }
+    /* Current line: bigger, bolder, themed-accent color, and a soft
+       glow in the same accent so it reads as the focus even when
+       overlapping the spectrum reflection behind it. Letter-spacing
+       tightens slightly for visual gravity. */
+    .lyrics .line.current {
+      opacity: 1;
+      color: var(--theme-accent);
+      font-weight: 800;
+      font-size: 1.15em;
+      letter-spacing: -0.01em;
+      text-shadow:
+        0 0 12px rgba(var(--theme-accent-rgb), 0.35),
+        0 1px 2px rgba(0, 0, 0, 0.6);
+    }
+    .lyrics.hidden { display: none; }
+
+    /* Progress bar — first element of the "bottom group". margin-top: auto
+       eats whatever vertical slack is left in .content, pushing this and
+       everything below it (.transport, .phase) to the bottom of the column.
+       When lyrics ARE rendered as flex:1, the lyrics take the slack first
+       and this margin contributes nothing. When lyrics are absent, the
+       margin keeps progress + transport + status pinned to the bottom
+       instead of collapsing toward the middle. */
+    .progress {
+      width: 100%;
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 4px;
+      flex: 0 0 auto;
+      margin-top: auto;
+    }
+    .progress .track {
+      height: 4px;
+      background: #2a2a32;
+      border-radius: 2px;
+      overflow: hidden;
+      position: relative;
+    }
+    .progress .fill {
+      position: absolute;
+      inset: 0;
+      background: var(--theme-accent);
+      transform-origin: left center;
+      transform: scaleX(0);
+      will-change: transform;
+    }
+    .progress .times {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      opacity: 0.6;
+    }
+
+    /* Transport — spans the full content width. Buttons are spread evenly
+       so the row visually balances regardless of how wide the content
+       column ends up (wide-strip vs vertical). */
+    .transport {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex: 0 0 auto;
+      width: 100%;
+      justify-content: space-between;
+    }
+    .t-btn {
+      flex: 1 1 0;
+      min-width: 0;
+      height: clamp(44px, 7.5vmin, 60px);
+      border-radius: 999px;
+      border: none;
+      background: #1c1c22;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 80ms;
+    }
+    .t-btn:hover { background: #2a2a32; }
+    .t-btn:active { background: #2a2a32; }
+    .t-btn:disabled { opacity: 0.3; cursor: default; }
+    .t-btn svg {
+      width: 30%;
+      max-width: 24px;
+      max-height: 24px;
+      pointer-events: none;
+      fill: currentColor;
+    }
+    .t-btn.center {
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);
+    }
+    /* Connect / Playlists slot — accent-tinted to match the source
+       chip color, but a subtler treatment than the play button. When the
+       button is "active" (we're already in the playlists view, so the
+       icon is a back arrow), invert to a filled accent pill — same
+       language as the queue button's active state. */
+    .t-btn.lib {
+      color: var(--theme-accent);
+    }
+    .t-btn.lib.active {
+      background: var(--theme-accent);
+      color: var(--theme-accent-fg);
+    }
+
+    .phase {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      opacity: 0.45;
+      text-transform: uppercase;
+      flex: 0 0 auto;
+    }
+    .pulse {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--theme-accent);
+      margin-right: 8px;
+      vertical-align: middle;
+      transition: opacity 200ms;
+      opacity: 0.25;
+    }
+    .pulse.live { opacity: 1; }
+    .err { color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <main class="root size-vertical" id="root">
+    <!-- crossorigin: required so canvas getImageData on the foreground art
+         doesn't taint and we can extract the dominant color for the
+         equalizer's two-tone gradient. The host's CORS policy is wide
+         open so the request succeeds either way. -->
+    <img class="art-bg" id="artBg" alt="" aria-hidden="true" crossorigin="anonymous">
+    <!-- Spectrum visualizer. SSE stream from /api/audio/spectrum/stream
+         feeds DOM bars directly. Hidden by default — only updated when
+         listeningView=Equalizer is active in listening mode, or the
+         eqBackground option is on. -->
+    <div class="eq-visualizer" id="eqVisualizer" aria-hidden="true"></div>
+    <img class="art empty" id="art" alt="" crossorigin="anonymous">
+    <div class="content">
+      <div class="header-row">
+        <div class="text">
+          <div class="title" id="title">Connecting…</div>
+          <div class="artist" id="artist"></div>
+          <div class="source empty" id="source">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="name">Spotify</span>
+            <span aria-hidden="true">·</span>
+            <span class="album" id="sourceAlbum"></span>
+          </div>
+        </div>
+        <div class="header-right">
+          <div class="upnext-chip empty" id="upnext"><span class="label">Up next</span><span id="upnextText"></span></div>
+          <button class="queue-btn" id="queueBtn" type="button" aria-label="Show queue" title="Show queue">
+            <!-- Spotify-style queue glyph: three horizontal bars (top two
+                 full width, bottom shorter) + a play triangle to the right
+                 of the bottom bar. Reads instantly as "what's next in
+                 line" rather than the generic hamburger. -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="3" y1="6"  x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="12" y2="18"/>
+              <path d="M16 15.5l5 2.5-5 2.5z" fill="currentColor" stroke="none"/>
+            </svg>
+          </button>
+          <!-- Settings button — opens the in-widget settings view.
+               Shares the queue-btn shape/styling so the header-right
+               trio reads as a uniform control group. -->
+          <button class="queue-btn settings-btn" id="settingsBtn" type="button" aria-label="Settings" title="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <!-- Horizon line — visible reference at the spectrum's max-peak
+           level. Stays under the source chip; bars peak exactly here. -->
+      <div class="horizon" id="horizon" aria-hidden="true"></div>
+      <!-- Lyrics container. Visible when view='lyrics' AND lyrics found. -->
+      <div class="lyrics empty" id="lyrics"></div>
+      <!-- Queue + Playlists list. Visible when view='queue' or 'playlists'.
+           Same DOM container, repopulated based on state. -->
+      <div class="list-view hidden" id="listView"></div>
+      <div class="progress">
+        <div class="track"><div class="fill" id="fill"></div></div>
+        <div class="times"><span id="curTime">0:00</span><span id="totTime">0:00</span></div>
+      </div>
+      <div class="transport">
+        <button class="t-btn" id="prevBtn" type="button" aria-label="Previous track" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 5h2v14H6zM10 12l9-7v14z"/>
+          </svg>
+        </button>
+        <button class="t-btn center" id="toggleBtn" type="button" aria-label="Play" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true" id="toggleIcon">
+            <path d="M7 5l13 7-13 7z"/>
+          </svg>
+        </button>
+        <button class="t-btn" id="nextBtn" type="button" aria-label="Next track" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 5l9 7-9 7zM16 5h2v14h-2z"/>
+          </svg>
+        </button>
+        <!-- Slot 4: Playlists when authed, Connect when not. Same shape so
+             the layout doesn't shift when auth flips. id stays stable;
+             we swap the inner SVG + aria-label + click handler. -->
+        <button class="t-btn lib" id="libBtn" type="button" aria-label="Connect Spotify">
+          <svg viewBox="0 0 24 24" aria-hidden="true" id="libIcon">
+            <!-- Default = Spotify wordmark icon (Connect) -->
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+  </main>
+
+  <script type="module">
+    // Phase 7 goal: aspect-ratio responsive layout. ResizeObserver toggles
+    // .size-wide vs .size-vertical on the root element. Same DOM, just two
+    // flex orientations. Layout calculation is async and frame-batched, so
+    // the lyrics translateY math (which reads lyricsEl.clientHeight) keeps
+    // working — clientHeight reflects the actual rendered viewport.
+
+    const HOST = 'http://127.0.0.1:8976';
+    const TICK_MS = 200;
+    const SEEK_THRESHOLD_FORWARD = 2500;
+    const SEEK_THRESHOLD_BACKWARD = 2000;
+    // Poll cadence is now an iCUE option (Behavior > Polling Interval).
+    let pollIntervalMs = 1500;
+    let pollTimer = null;
+    function startPollTimer() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(() => { pollOnce(); }, pollIntervalMs);
+    }
+
+    // ---- Widget settings (host-backed) ---------------------------------
+    // Settings live in the widget UI now, persisted via the host at
+    // GET/POST /api/widget/settings (→ %APPDATA%\BetterXeneonWidget\
+    // config.json). The Settings button in the header opens the in-widget
+    // settings view; controls in that view drive updateSetting(key, value)
+    // which both fires the registered handler AND POSTs the full settings
+    // object back to the host. Saves are debounced so a slider drag
+    // doesn't generate a hundred POSTs.
+    //
+    // Adding a new setting:
+    //   1. Add a key + default to SETTING_DEFAULTS
+    //   2. Add a row to SETTING_DEFS (the schema for the settings UI)
+    //   3. Call registerSetting(key, handler) where you want the value
+    const SETTING_DEFAULTS = Object.freeze({
+      pollIntervalMs: 1500,
+      autoExpand: true,
+      autoExpandAfterSec: 30,
+      showLyrics: true,
+      lyricSyncOffsetMs: 0,
+      listeningView: 0,
+      eqBackground: false,
+      eqShowAlbumArt: false,
+      eqVisualizerMode: 0,
+      theme: 0,
+    });
+    const settings = { ...SETTING_DEFAULTS };
+    const settingHandlers = {};
+
+    function registerSetting(key, onChange) {
+      settingHandlers[key] = onChange;
+      // Fire immediately with whatever's currently in `settings`
+      // (defaults at module-init time; loadSettings will re-fire with
+      // the host-backed value if it differs).
+      onChange(settings[key]);
+    }
+
+    async function loadSettings() {
+      try {
+        const r = await fetch(HOST + '/api/widget/settings');
+        if (!r.ok) return;
+        const stored = await r.json();
+        for (const key of Object.keys(SETTING_DEFAULTS)) {
+          if (key in stored) {
+            const newValue = stored[key];
+            if (newValue !== settings[key]) {
+              settings[key] = newValue;
+              if (settingHandlers[key]) settingHandlers[key](newValue);
+            }
+          }
+        }
+      } catch { /* offline — defaults already loaded */ }
+    }
+
+    let _saveTimer = null;
+    function saveSettings() {
+      // Debounce — slider drags fire dozens of updateSetting calls per
+      // second. Coalesce to one POST 300ms after the last change.
+      if (_saveTimer) clearTimeout(_saveTimer);
+      _saveTimer = setTimeout(async () => {
+        _saveTimer = null;
+        try {
+          await fetch(HOST + '/api/widget/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(settings),
+          });
+        } catch { /* surfaced by next attempt */ }
+      }, 300);
+    }
+
+    function updateSetting(key, value) {
+      if (settings[key] === value) return;
+      settings[key] = value;
+      if (settingHandlers[key]) settingHandlers[key](value);
+      saveSettings();
+    }
+
+    // iCUE lifecycle stub. The icuewidget CLI validator rejects any
+    // widget that doesn't declare `globalThis.icueEvents` with these
+    // two handlers — even when (as here) the widget no longer surfaces
+    // any iCUE-managed properties. Keeping them as no-ops is enough to
+    // pass validation and import cleanly. All settings flow through the
+    // host (loadSettings / saveSettings / updateSetting) instead.
+    globalThis.icueEvents = {
+      onICUEInitialized: () => {},
+      onDataUpdated: () => {},
+    };
+
+    // Live snapshots of each Behavior option. The auto-expand pair is
+    // parked here until the listening-mode phase lands — registering them
+    // now keeps the iCUE settings panel in sync with v1's layout.
+    let optShowLyrics = true;
+    let optLyricSyncOffsetMs = 0;
+    // eslint-disable-next-line no-unused-vars -- consumed in a future phase
+    let optAutoExpand = true;
+    // eslint-disable-next-line no-unused-vars -- consumed in a future phase
+    let optAutoExpandAfterSec = 30;
+
+    // Spotify state — populated by the slow Spotify poll. Up-next is the
+    // head of the queue; library is the user's playlists.
+    // 10s cadence on the queue is the sweet spot — Spotify rate-limits
+    // /me/player/queue together with /me/player, so we want to stay well
+    // below ~30 calls/min combined. The "up next" line and the queue list
+    // tolerate a 10s refresh visually (no scrubbing, no second-by-second
+    // accuracy needed).
+    const SPOTIFY_QUEUE_MS = 10000;
+    const SPOTIFY_PLAYLISTS_MS = 600000;   // 10 minutes
+    let spotifyQueue = [];
+    let spotifyPlaylists = [];
+    let lastUpnextText = '';
+    let queueTimer = null;
+    let playlistsTimer = null;
+    let spotifyQueueInFlight = false;
+    let spotifyPlaylistsInFlight = false;
+
+    // View state for the content area: 'lyrics' (default — lyrics if
+    // available, queue auto-fallback otherwise), 'queue' (user explicitly
+    // tapped the queue button), 'playlists' (user tapped the lib btn
+    // while authed), or 'audio-source' (sub-view from playlists for
+    // picking the WASAPI capture device — handles software-mixer
+    // setups like SteelSeries Sonar). Auto-resets to 'lyrics' on
+    // track change so the user doesn't get stuck on a stale list.
+    let currentView = 'lyrics';
+
+    // Audio source picker state. Populated on first entry to the picker
+    // view (or when the EQ first becomes visible). Devices don't change
+    // often — no continuous poll.
+    let audioSources = [];
+    let audioSourceActiveId = null;
+    let audioSourceActiveName = '';
+    // Tracks where the user opened the audio-source view from, so the
+    // back button + auto-return-on-pick land them back in their
+    // entry-point view (playlists or settings).
+    let audioSourceFrom = 'playlists';
+
+    // Listening (screensaver) mode state. Auto-expands when the user
+    // hasn't interacted for autoExpandAfterSec, exits on any touch /
+    // pointer / key event. listeningView selects the submode:
+    //   0 = Lyrics      (keep lyrics + metadata, hide bottom bar)
+    //   1 = Album       (center the cover, hide everything else)
+    //   2 = Equalizer   (full-screen real-time bars)
+    let listeningMode = false;
+    let lastActivityAt = performance.now();
+    let optListeningView = 0;
+
+    // Equalizer-as-background option. Independent of listening mode —
+    // when on, the .art-bg blurred-cover layer is swapped for the EQ
+    // visualizer behind the content. Stacks with listening-equalizer if both
+    // are active (the full-screen overlay takes precedence visually).
+    let optEqBackground = false;
+    // Aspect-ratio threshold separating wide-strip from square/tall.
+    // Edge cell aspect ratios from the kit:
+    //   Small horizontal:  840×344 = 2.44 → wide
+    //   Medium horizontal: 840×696 = 1.21 → vertical
+    //   Large horizontal:  1688×696 = 2.43 → wide
+    //   X-Large horizontal:2536×696 = 3.64 → wide
+    //   Small vertical:    696×416 = 1.67 → vertical
+    //   Medium vertical:   696×840 = 0.83 → vertical
+    //   Large vertical:    696×1688 = 0.41 → vertical
+    //   X-Large vertical:  696×2536 = 0.27 → vertical
+    // 2.0 cleanly separates the four wide cells from the four other ones.
+    const WIDE_ASPECT_THRESHOLD = 2.0;
+
+    const rootEl = document.getElementById('root');
+    const artEl = document.getElementById('art');
+    const artBgEl = document.getElementById('artBg');
+    const upnextEl = document.getElementById('upnext');
+    const upnextTextEl = document.getElementById('upnextText');
+    const queueBtn = document.getElementById('queueBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const listViewEl = document.getElementById('listView');
+    const titleEl = document.getElementById('title');
+    const artistEl = document.getElementById('artist');
+    const sourceEl = document.getElementById('source');
+    const sourceAlbumEl = document.getElementById('sourceAlbum');
+    const lyricsEl = document.getElementById('lyrics');
+    const prevBtn = document.getElementById('prevBtn');
+    const toggleBtn = document.getElementById('toggleBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const libBtn = document.getElementById('libBtn');
+    const toggleIcon = document.getElementById('toggleIcon');
+    const libIcon = document.getElementById('libIcon');
+    const fillEl = document.getElementById('fill');
+    const curTimeEl = document.getElementById('curTime');
+    const totTimeEl = document.getElementById('totTime');
+    // pulseEl + statusEl used to be a "host healthy / error" indicator
+    // at the bottom-left. Removed from markup per user request — the
+    // refs stay so the polling code below can blind-update them via
+    // optional chaining without throwing.
+    const pulseEl = document.getElementById('pulse');     // may be null
+    const statusEl = document.getElementById('status');   // may be null
+
+    const PLAY_PATH = 'M7 5l13 7-13 7z';
+    const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
+
+    let lastTitle = null;
+    let lastArtist = null;
+    let lastArtVersion = -1;
+    let lastHasArt = null;
+    let lastIsPlaying = null;
+    let lastCanPrev = null;
+    let lastCanNext = null;
+    let lastCanToggle = null;
+    let lastCurTime = null;
+    let lastTotTime = null;
+    let lastFillRatio = -1;
+    let lastSourceVisible = null;     // bool: should the source line show?
+    let lastSourceAlbum = null;       // string we last wrote to .album
+    let lastLibMode = null;           // 'connect' | 'playlists'
+    let pulseTimeout = null;
+    let eqLayoutCache = null;
+
+    let anchorPosMs = 0;
+    let anchorAt = 0;
+    let durationMs = 0;
+    let isPlaying = false;
+    let lastTrackKey = '';
+    let spotifyAuthed = false;
+
+    let parsedLyrics = [];
+    let lyricLineEls = [];
+    let lyricsTrackEl = null;
+    let currentLineIdx = -1;
+    let lyricsFetchKey = '';
+    // Most-recent track metadata. Tracked separately from lyricsFetchKey
+    // so the showLyrics toggle can call fetchLyricsFor on the *current*
+    // track without waiting for the next track-change to trigger it.
+    let currentArtist = '';
+    let currentTitle = '';
+    let currentAlbum = '';
+
+    const inFlight = { prev: false, toggle: false, next: false };
+
+    // --- Layout: aspect-ratio observer ----------------------------------
+    let lastIsWide = null;
+    function applyLayout(width, height) {
+      if (width <= 0 || height <= 0) return;
+      const aspect = width / height;
+      const isWide = aspect >= WIDE_ASPECT_THRESHOLD;
+      if (isWide === lastIsWide) return;
+      lastIsWide = isWide;
+      rootEl.classList.toggle('size-wide', isWide);
+      rootEl.classList.toggle('size-vertical', !isWide);
+      invalidateEqLayoutCache();
+      // After a layout swap, the lyrics viewport height changes — re-apply
+      // the current line's translateY so it stays centered.
+      if (lyricsTrackEl && currentLineIdx >= 0 && lyricLineEls[currentLineIdx]) {
+        const lineEl = lyricLineEls[currentLineIdx];
+        const containerH = lyricsEl.clientHeight;
+        const lineCenter = lineEl.offsetTop + lineEl.offsetHeight / 2;
+        const offset = containerH / 2 - lineCenter;
+        // Disable transition for the layout-swap snap so it doesn't
+        // animate from the old position.
+        const prevTransition = lyricsTrackEl.style.transition;
+        lyricsTrackEl.style.transition = 'none';
+        lyricsTrackEl.style.transform = 'translateY(' + offset.toFixed(1) + 'px)';
+        requestAnimationFrame(() => {
+          if (lyricsTrackEl) lyricsTrackEl.style.transition = prevTransition;
+        });
+      }
+    }
+    new ResizeObserver(entries => {
+      for (const entry of entries) {
+        applyLayout(entry.contentRect.width, entry.contentRect.height);
+      }
+      // Keep the EQ visualizer geometry in sync with the visible size.
+      // No-op when the visualizer is hidden (eqResize is cheap either way).
+      eqResize();
+    }).observe(rootEl);
+    applyLayout(rootEl.clientWidth, rootEl.clientHeight);
+
+    function setText(el, value) {
+      if (el.textContent !== value) el.textContent = value;
+    }
+
+    function setArt(hasArt, version) {
+      if (hasArt && version !== lastArtVersion) {
+        const url = HOST + '/api/media/album-art?v=' + version;
+        artEl.src = url;
+        // Mirror the same URL into the bg layer. Browser caches the
+        // decoded bitmap once, both <img>s share it — no extra fetch.
+        artBgEl.src = url;
+        lastArtVersion = version;
+        invalidateEqLayoutCache();
+      }
+      if (hasArt !== lastHasArt) {
+        artEl.classList.toggle('empty', !hasArt);
+        lastHasArt = hasArt;
+        // Show/hide the bg layer in lockstep with the foreground art.
+        artBgEl.classList.toggle('show', hasArt);
+        invalidateEqLayoutCache();
+      }
+    }
+
+    function setToggleState(playing, canToggle) {
+      if (playing !== lastIsPlaying) {
+        toggleIcon.firstElementChild.setAttribute('d', playing ? PAUSE_PATH : PLAY_PATH);
+        toggleBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+        lastIsPlaying = playing;
+      }
+      if (canToggle !== lastCanToggle) {
+        toggleBtn.disabled = !canToggle;
+        lastCanToggle = canToggle;
+      }
+    }
+
+    function setBtnEnabled(btn, enabled, lastVar) {
+      if (enabled !== lastVar) btn.disabled = !enabled;
+      return enabled;
+    }
+
+    // Source line — shows "Spotify · <album>" under the artist when SMTC
+    // reports Spotify is the source. Hidden otherwise (no flex room).
+    function setSource(isSpotify, album) {
+      const visible = !!isSpotify;
+      if (visible !== lastSourceVisible) {
+        sourceEl.classList.toggle('empty', !visible);
+        lastSourceVisible = visible;
+      }
+      if (!visible) return;
+      const a = album || '';
+      if (a !== lastSourceAlbum) {
+        sourceAlbumEl.textContent = a;
+        lastSourceAlbum = a;
+      }
+    }
+
+    // Library / Connect / Back slot — same button element, three icon
+    // states. Auth determines whether it's connect or playlists; if we're
+    // already IN the playlists view, the icon becomes a back arrow so the
+    // same physical button is the way out. No layout shift between modes.
+    const PLAYLISTS_SVG =
+      '<line x1="8" y1="6" x2="21" y2="6"/>' +
+      '<line x1="8" y1="12" x2="21" y2="12"/>' +
+      '<line x1="8" y1="18" x2="21" y2="18"/>' +
+      '<line x1="3" y1="6" x2="3.01" y2="6"/>' +
+      '<line x1="3" y1="12" x2="3.01" y2="12"/>' +
+      '<line x1="3" y1="18" x2="3.01" y2="18"/>';
+    const BACK_SVG =
+      '<path d="M19 12H5"/>' +
+      '<path d="M12 19l-7-7 7-7"/>';
+    const CONNECT_SVG =
+      '<circle cx="12" cy="12" r="10"/>' +
+      '<path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>';
+    function setLibMode() {
+      let mode;
+      if (!spotifyAuthed) mode = 'connect';
+      else if (currentView === 'playlists' || currentView === 'audio-source') mode = 'back';
+      else mode = 'playlists';
+      if (mode === lastLibMode) return;
+      lastLibMode = mode;
+      if (mode === 'back') {
+        libIcon.innerHTML = BACK_SVG;
+        libIcon.setAttribute('fill', 'none');
+        libIcon.setAttribute('stroke', 'currentColor');
+        libIcon.setAttribute('stroke-width', '2.4');
+        libIcon.setAttribute('stroke-linecap', 'round');
+        libIcon.setAttribute('stroke-linejoin', 'round');
+        libBtn.setAttribute('aria-label', 'Back to now playing');
+      } else if (mode === 'playlists') {
+        libIcon.innerHTML = PLAYLISTS_SVG;
+        libIcon.setAttribute('fill', 'none');
+        libIcon.setAttribute('stroke', 'currentColor');
+        libIcon.setAttribute('stroke-width', '2');
+        libIcon.setAttribute('stroke-linecap', 'round');
+        libIcon.setAttribute('stroke-linejoin', 'round');
+        libBtn.setAttribute('aria-label', 'Open Playlists');
+      } else {
+        libIcon.innerHTML = CONNECT_SVG;
+        libIcon.setAttribute('fill', 'currentColor');
+        libIcon.removeAttribute('stroke');
+        libIcon.removeAttribute('stroke-width');
+        libIcon.removeAttribute('stroke-linecap');
+        libIcon.removeAttribute('stroke-linejoin');
+        libBtn.setAttribute('aria-label', 'Connect Spotify');
+      }
+    }
+
+    function flashPulse() {
+      if (!pulseEl) return;
+      pulseEl.classList.add('live');
+      if (pulseTimeout) clearTimeout(pulseTimeout);
+      pulseTimeout = setTimeout(() => pulseEl.classList.remove('live'), 250);
+    }
+
+    async function postAction(path, key) {
+      if (inFlight[key]) return;
+      inFlight[key] = true;
+      try { await fetch(HOST + path, { method: 'POST' }); }
+      catch { /* surfaced by next poll's status */ }
+      finally { inFlight[key] = false; }
+    }
+
+    prevBtn.addEventListener('click', () => postAction('/api/media/previous', 'prev'));
+    toggleBtn.addEventListener('click', () => postAction('/api/media/toggle', 'toggle'));
+    nextBtn.addEventListener('click', () => postAction('/api/media/next', 'next'));
+    libBtn.addEventListener('click', async () => {
+      if (lastLibMode === 'connect') {
+        // POST /api/spotify/connect — host opens the user's default browser
+        // to the Spotify auth URL via the betterxeneonwidget:// scheme.
+        try { await fetch(HOST + '/api/spotify/connect', { method: 'POST' }); }
+        catch { /* surfaced by next poll's status */ }
+      } else if (currentView === 'audio-source') {
+        // Inside the audio-source sub-view → tap back goes to wherever
+        // the picker was opened from (playlists or settings).
+        setView(audioSourceFrom);
+      } else {
+        // Authed and on lyrics/queue/playlists: toggle playlists view.
+        setView(currentView === 'playlists' ? 'lyrics' : 'playlists');
+      }
+    });
+    queueBtn.addEventListener('click', () => {
+      setView(currentView === 'queue' ? 'lyrics' : 'queue');
+    });
+    settingsBtn.addEventListener('click', () => {
+      setView(currentView === 'settings' ? 'lyrics' : 'settings');
+    });
+
+    // --- Up-next renderer + Spotify queue/playlists pollers --------------
+    function setUpnext(text) {
+      const v = text || '';
+      if (v === lastUpnextText) return;
+      lastUpnextText = v;
+      if (v) {
+        upnextTextEl.textContent = v;
+        upnextEl.classList.remove('empty');
+      } else {
+        upnextEl.classList.add('empty');
+      }
+    }
+
+    async function pollSpotifyQueue() {
+      if (!spotifyAuthed) {
+        setUpnext('');
+        spotifyQueue = [];
+        // The queue is what we fall back to when lyrics are absent, so a
+        // fresh empty queue still needs a re-render to clear the list.
+        if (listVisible()) applyView();
+        return;
+      }
+      if (spotifyQueueInFlight) return;
+      spotifyQueueInFlight = true;
+      try {
+        const r = await fetch(HOST + '/api/spotify/queue');
+        if (!r.ok) return;
+        const data = await r.json();
+        spotifyQueue = Array.isArray(data) ? data : [];
+        if (spotifyQueue.length > 0) {
+          const t = spotifyQueue[0];
+          setUpnext((t.title || '') + (t.artist ? ' — ' + t.artist : ''));
+        } else {
+          setUpnext('');
+        }
+        if (listVisible()) applyView();
+        // Prefetch lyrics for the next few queued tracks so by the time
+        // they actually play, the response is a memory-cache hit and the
+        // lyric track snaps in instantly rather than waiting for an LRClib
+        // round-trip (which can take 100ms-4s in our logs).
+        prefetchLyricsForQueue();
+      } catch { /* non-fatal */ }
+      finally { spotifyQueueInFlight = false; }
+    }
+
+    async function pollSpotifyPlaylists() {
+      if (!spotifyAuthed) {
+        spotifyPlaylists = [];
+        if (currentView === 'playlists') applyView();
+        return;
+      }
+      if (spotifyPlaylistsInFlight) return;
+      spotifyPlaylistsInFlight = true;
+      try {
+        const r = await fetch(HOST + '/api/spotify/playlists');
+        if (!r.ok) return;
+        const data = await r.json();
+        spotifyPlaylists = Array.isArray(data) ? data : [];
+        // Only re-render if we're currently showing playlists — otherwise
+        // it's stored ready for whenever the user taps the lib button.
+        if (currentView === 'playlists') applyView();
+      } catch { /* non-fatal */ }
+      finally { spotifyPlaylistsInFlight = false; }
+    }
+
+    // --- View state machine ---------------------------------------------
+    // The same content slot under the header swaps between three views:
+    //   lyrics     — the synced lyric track. Falls back to queue when no
+    //                lyrics are available (or the option is off) so the
+    //                slot is never just dead space.
+    //   queue      — Spotify "play queue" (next-up tracks). User-explicit.
+    //   playlists  — Spotify user playlists. User-explicit, authed-only.
+    // setView() also primes the relevant data poll so the user doesn't
+    // see a stale list — the periodic pollers keep it fresh after that.
+
+    async function playPlaylist(id) {
+      // Host route is /api/spotify/play/playlist/{id} (mirrors /play/track/{id}).
+      // The widget previously posted to /playlists/{id}/play which 404'd
+      // silently — taps did nothing.
+      try { await fetch(HOST + '/api/spotify/play/playlist/' + encodeURIComponent(id), { method: 'POST' }); }
+      catch { /* surfaced by next poll's status */ }
+    }
+
+    // --- Audio source picker --------------------------------------------
+    // Fetches the host's list of render endpoints and the current
+    // capture source. Used when the user opens the audio-source view
+    // (or any time we need to refresh after a device change). The host
+    // owns the actual device-capture lifecycle — we just display
+    // options and forward the user's pick.
+    async function loadAudioSources() {
+      try {
+        const [dr, sr] = await Promise.all([
+          fetch(HOST + '/api/audio/spectrum/devices'),
+          fetch(HOST + '/api/audio/spectrum/source'),
+        ]);
+        if (dr.ok) audioSources = await dr.json();
+        if (sr.ok) {
+          const s = await sr.json();
+          audioSourceActiveId = s.activeId || '';
+          audioSourceActiveName = s.activeName || '';
+        }
+        if (currentView === 'audio-source') applyView();
+      } catch { /* non-fatal */ }
+    }
+
+    async function setAudioSource(deviceId) {
+      try {
+        const r = await fetch(HOST + '/api/audio/spectrum/source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deviceId }),
+        });
+        if (r.ok) {
+          const s = await r.json();
+          audioSourceActiveId = s.activeId || '';
+          audioSourceActiveName = s.activeName || '';
+        }
+      } catch { /* surfaced by next refresh */ }
+      // After picking, go back to wherever the user opened the picker from.
+      setView(audioSourceFrom);
+    }
+
+    async function disconnectSpotify() {
+      // Tell the host to drop the stored token. The widget's next poll
+      // will see connected:false within ~1.5s and the auth-flip handler
+      // will swap the lib button back to Connect, clear up-next, etc.
+      try { await fetch(HOST + '/api/spotify/disconnect', { method: 'POST' }); }
+      catch { /* surfaced by next poll */ }
+      setView('lyrics');
+    }
+
+    function listVisible() {
+      // True when the list-view slot is the visible one: either the
+      // user is on queue/playlists/audio-source/settings, or the default
+      // 'lyrics' state has fallen back to queue because there are no
+      // lyrics to show.
+      if (currentView !== 'lyrics') return true;
+      return parsedLyrics.length === 0 || !optShowLyrics;
+    }
+
+    function setView(view) {
+      const prev = currentView;
+      currentView = view;
+      // Prime the relevant data so the list isn't blank on first open.
+      if (view === 'playlists') pollSpotifyPlaylists();
+      if (view === 'queue') pollSpotifyQueue();
+      if (view === 'audio-source') loadAudioSources();
+      // Settings view: reset to the General tab on fresh entry. When
+      // backing out of audio-source (where the user came from the
+      // Equalizer tab), land them back on Equalizer instead.
+      if (view === 'settings') {
+        settingsActiveTab = prev === 'audio-source' ? 'equalizer' : 'general';
+      }
+      applyView();
+    }
+
+    // --- Equalizer (WASAPI loopback spectrum) ---------------------------
+    // The host runs a continuous WASAPI loopback capture, FFTs the buffer
+    // into 64 log-spaced bins, and pushes snapshots at ~60Hz over SSE.
+    // The visualizer renders as normal DOM bars instead of a canvas: iCUE's
+    // QtWebEngine was flashing whenever the canvas renderer was active.
+
+    const eqVisualizer = document.getElementById('eqVisualizer');
+    const EQ_BINS = 64;
+    const EQ_BAR_COUNT = 64;
+    const EQ_RADIAL_COUNT = 128;
+    const EQ_TUNNEL_RINGS = 18;
+    const EQ_TUNNEL_SIDES = 8;
+    let eqSpectrum = new Float32Array(EQ_BINS);
+    const eqPeaks = new Float32Array(EQ_BAR_COUNT);
+    const eqBars = [];
+    for (let i = 0; i < EQ_BAR_COUNT; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'eq-slot';
+      const bar = document.createElement('div');
+      bar.className = 'eq-bar';
+      const reflect = document.createElement('div');
+      reflect.className = 'eq-reflect';
+      const peak = document.createElement('div');
+      peak.className = 'eq-peak';
+      slot.appendChild(bar);
+      slot.appendChild(reflect);
+      slot.appendChild(peak);
+      eqVisualizer.appendChild(slot);
+      eqBars.push({ slot, bar, reflect, peak });
+    }
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const eqSvg = document.createElementNS(SVG_NS, 'svg');
+    eqSvg.classList.add('eq-svg');
+    eqSvg.setAttribute('aria-hidden', 'true');
+    eqSvg.setAttribute('focusable', 'false');
+
+    const eqRadialLayer = document.createElementNS(SVG_NS, 'g');
+    const eqRadialLines = [];
+    for (let i = 0; i < EQ_RADIAL_COUNT; i++) {
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('stroke-linecap', 'round');
+      eqRadialLayer.appendChild(line);
+      eqRadialLines.push(line);
+    }
+    const eqRadialCore = document.createElementNS(SVG_NS, 'circle');
+    eqRadialLayer.appendChild(eqRadialCore);
+
+    const eqTunnelLayer = document.createElementNS(SVG_NS, 'g');
+    const eqTunnelRings = [];
+    for (let i = 0; i < EQ_TUNNEL_RINGS; i++) {
+      const poly = document.createElementNS(SVG_NS, 'polygon');
+      poly.setAttribute('fill', 'none');
+      poly.setAttribute('stroke-linejoin', 'round');
+      eqTunnelLayer.appendChild(poly);
+      eqTunnelRings.push(poly);
+    }
+    const eqTunnelSpokes = [];
+    for (let i = 0; i < EQ_TUNNEL_SIDES; i++) {
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('stroke-linecap', 'round');
+      eqTunnelLayer.appendChild(line);
+      eqTunnelSpokes.push(line);
+    }
+    eqSvg.appendChild(eqRadialLayer);
+    eqSvg.appendChild(eqTunnelLayer);
+    eqVisualizer.appendChild(eqSvg);
+
+    let eqStream = null;
+    let eqLastRenderAt = 0;
+    let eqCssW = 0;
+    let eqCssH = 0;
+    let eqBass = 0;
+    let eqMid = 0;
+    let eqTreble = 0;
+    let eqBeatHold = 0;
+    const eqBinOffsets = new Int8Array(EQ_BAR_COUNT);
+    for (let i = 0; i < EQ_BAR_COUNT; i++) {
+      const center = (EQ_BAR_COUNT - 1) / 2;
+      const side = i < center ? -1 : 1;
+      const jitter = ((i * 17 + 13) % 5) - 2;
+      eqBinOffsets[i] = side * (1 + ((i * 7) % 3)) + jitter;
+    }
+
+    // Bar color. Two stops — bright top, darker bottom of the same hue —
+    // give the bars depth without needing per-album palette engineering.
+    // Default = Spotify green; we re-derive from the album cover on each
+    // track change. Falling back to green when no cover is loaded keeps
+    // the silhouette consistent during connection / startup.
+    const EQ_DEFAULT_TOP = [29, 185, 84];     // #1db954
+    const EQ_DEFAULT_BOT = [16, 92, 45];      // darker green
+    let eqColorTop = EQ_DEFAULT_TOP;
+    let eqColorBot = EQ_DEFAULT_BOT;
+    // Theme selector: 0 = album-derived (uniform single gradient bars +
+    // accent extracted from cover art), 1-5 = preset palette functions
+    // that vary per-bar AND animate over time (see PRESET_PALETTES).
+    // The chosen theme also drives every CSS accent (play button,
+    // progress fill, source chip, current lyric, etc.) via the
+    // .theme-* class on rootEl. Tied to the `theme` iCUE option.
+    let optTheme = 0;
+    let optEqShowAlbumArt = false;
+    let optEqVisualizerMode = 0;
+    // List of theme class names (1-indexed in optTheme). Index 0 is null
+    // because the album theme doesn't use a class — its accent values
+    // are set inline by JS so they track the current cover.
+    const THEME_NAMES = [null, 'rainbow', 'neon', 'sunset', 'aurora', 'mono'];
+
+    // --- Preset palettes (ported from the Equalizer.zip prototype) ------
+    // Each is a function (t, time) → [r,g,b] where t ∈ [0,1] is the bar
+    // position across the spectrum and `time` is a seconds-clock used to
+    // animate the palette (rainbows cycle, neon/aurora/sunset slowly
+    // morph). Mono is time-independent — pure greyscale ramp.
+    function _eqHsl(h, s, l) {
+      // h: 0..360, s,l: 0..100. Standard formula; same one the prototype
+      // shipped with so the colors come out identical to the source.
+      s /= 100; l /= 100;
+      const k = (n) => (n + h / 30) % 12;
+      const a = s * Math.min(l, 1 - l);
+      const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+      return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+    }
+    function _eqLerpRGB(c1, c2, t) {
+      return [
+        c1[0] + (c2[0] - c1[0]) * t,
+        c1[1] + (c2[1] - c1[1]) * t,
+        c1[2] + (c2[2] - c1[2]) * t,
+      ];
+    }
+    const PRESET_PALETTES = {
+      rainbow(t, time) {
+        const h = ((t * 360) + time * 22) % 360;
+        return _eqHsl(h, 90, 58);
+      },
+      neon(t, time) {
+        const stops = [_eqHsl(180, 100, 60), _eqHsl(305, 100, 62), _eqHsl(50, 100, 60)];
+        const f = (t * 3 + time * 0.18) % 3;
+        const i = Math.floor(f), k = f - i;
+        return _eqLerpRGB(stops[i], stops[(i + 1) % 3], k);
+      },
+      sunset(t, time) {
+        const stops = [_eqHsl(355, 80, 55), _eqHsl(25, 90, 60), _eqHsl(290, 70, 55), _eqHsl(15, 85, 50)];
+        const f = (t * 4 + time * 0.07) % 4;
+        const i = Math.floor(f), k = f - i;
+        return _eqLerpRGB(stops[i], stops[(i + 1) % 4], k);
+      },
+      aurora(t, time) {
+        const stops = [_eqHsl(180, 75, 55), _eqHsl(150, 80, 55), _eqHsl(255, 70, 60), _eqHsl(200, 85, 55)];
+        const f = (t * 4 + time * 0.05) % 4;
+        const i = Math.floor(f), k = f - i;
+        return _eqLerpRGB(stops[i], stops[(i + 1) % 4], k);
+      },
+      mono(t /*, _time */) {
+        const v = Math.round(40 + t * 215);
+        return [v, v, v];
+      },
+    };
+    // (THEME_NAMES is declared earlier — it shares the same 0..5 mapping
+    // as both palette dispatch and CSS theme class application.)
+
+    // --- Settings UI schema ----------------------------------------------
+    // Tabbed panel: General / Listening / Equalizer. Only the items in
+    // the active tab render in the body. Each tab has an icon SVG body
+    // (inserted into a <svg viewBox="0 0 24 24"> wrapper at render
+    // time) plus an items array. Audio source lives at the bottom of
+    // the Equalizer tab via a special 'audio-source-link' item type
+    // — clicking it switches to the audio-source sub-view.
+    const SETTING_TABS = [
+      {
+        id: 'general',
+        label: 'General',
+        icon: '<circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/>'
+          + '<g stroke="currentColor" stroke-width="2" stroke-linecap="round">'
+          + '<line x1="12" y1="3" x2="12" y2="5.5"/>'
+          + '<line x1="12" y1="18.5" x2="12" y2="21"/>'
+          + '<line x1="3" y1="12" x2="5.5" y2="12"/>'
+          + '<line x1="18.5" y1="12" x2="21" y2="12"/>'
+          + '<line x1="5.5" y1="5.5" x2="7.3" y2="7.3"/>'
+          + '<line x1="16.7" y1="16.7" x2="18.5" y2="18.5"/>'
+          + '<line x1="18.5" y1="5.5" x2="16.7" y2="7.3"/>'
+          + '<line x1="7.3" y1="16.7" x2="5.5" y2="18.5"/>'
+          + '</g>',
+        items: [
+          { key: 'showLyrics', type: 'switch',
+            label: 'Show lyrics',
+            sub: 'Show synced lyrics when available' },
+          { key: 'lyricSyncOffsetMs', type: 'slider',
+            label: 'Lyric sync offset',
+            min: -2000, max: 2000, step: 50, unit: 'ms', signed: true },
+          { key: 'pollIntervalMs', type: 'slider',
+            label: 'Poll interval',
+            sub: 'How often the widget refreshes',
+            min: 500, max: 5000, step: 100, unit: 'ms' },
+          { type: 'spotify-disconnect-link' },
+        ],
+      },
+      {
+        id: 'listening',
+        label: 'Listening',
+        icon: '<path d="M4 14v-2a8 8 0 0 1 16 0v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+          + '<rect x="3" y="14" width="4" height="6" rx="1.5" fill="currentColor"/>'
+          + '<rect x="17" y="14" width="4" height="6" rx="1.5" fill="currentColor"/>',
+        items: [
+          { key: 'autoExpand', type: 'switch',
+            label: 'Auto-expand when idle',
+            sub: 'Show ambient view after no interaction' },
+          { key: 'autoExpandAfterSec', type: 'slider',
+            label: 'Idle delay',
+            min: 10, max: 120, step: 5, unit: 's' },
+          { key: 'listeningView', type: 'segment',
+            label: 'Mode',
+            options: [
+              { value: 0, label: 'Lyrics' },
+              { value: 1, label: 'Album' },
+              { value: 2, label: 'EQ' },
+            ] },
+        ],
+      },
+      {
+        id: 'equalizer',
+        label: 'Equalizer',
+        icon: '<rect x="4" y="9" width="3" height="11" rx="1" fill="currentColor"/>'
+          + '<rect x="10.5" y="4" width="3" height="16" rx="1" fill="currentColor"/>'
+          + '<rect x="17" y="12" width="3" height="8" rx="1" fill="currentColor"/>',
+        items: [
+          { key: 'eqBackground', type: 'switch',
+            label: 'Use as background',
+            sub: 'Show spectrum behind lyrics' },
+          { key: 'eqShowAlbumArt', type: 'switch',
+            label: 'Show album art alongside' },
+          { key: 'eqVisualizerMode', type: 'segment',
+            label: 'Visualizer',
+            options: [
+              { value: 0, label: 'Bars' },
+              { value: 1, label: 'Radial' },
+              { value: 2, label: 'Tunnel' },
+            ] },
+          { key: 'theme', type: 'segment',
+            label: 'Theme',
+            options: [
+              { value: 0, label: 'Album' },
+              { value: 1, label: 'Rainbow' },
+              { value: 2, label: 'Neon' },
+              { value: 3, label: 'Sunset' },
+              { value: 4, label: 'Aurora' },
+              { value: 5, label: 'Mono' },
+            ] },
+          { type: 'audio-source-link' },
+        ],
+      },
+    ];
+
+    // Which tab is showing in the settings panel. Resets to 'general'
+    // each time the settings view is opened — predictable starting
+    // point beats "wherever you left off".
+    let settingsActiveTab = 'general';
+
+    // --- Color helpers (RGB ↔ HSL) -------------------------------------
+    // We extract a dominant RGB from the cover, then go via HSL so we can
+    // hold hue constant and dial lightness up (top) / down (bottom) to
+    // produce the two-tone gradient.
+    function rgbToHsl(r, g, b) {
+      r /= 255; g /= 255; b /= 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const l = (max + min) / 2;
+      let h, s;
+      if (max === min) { h = 0; s = 0; }
+      else {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h /= 6;
+      }
+      return [h, s, l];
+    }
+    function hslToRgb(h, s, l) {
+      let r, g, b;
+      if (s === 0) { r = g = b = l; }
+      else {
+        const hue2rgb = (p, q, t) => {
+          if (t < 0) t += 1;
+          if (t > 1) t -= 1;
+          if (t < 1/6) return p + (q - p) * 6 * t;
+          if (t < 1/2) return q;
+          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          return p;
+        };
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1/3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1/3);
+      }
+      return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+    }
+
+    // Sample the album-art img into a 64×64 offscreen canvas, then
+    // bucket pixels into a 6×6×6 RGB cube and pick the dominant cube
+    // (weighted by saturation so a single bright accent beats a wash
+    // of muted pixels). This handles mostly-dark covers far better
+    // than the old "average all vibrant pixels" approach — averaging
+    // collapses three vibrant hues into mud, while histogram picks
+    // whichever hue actually dominates.
+    const _eqExtractSize = 64;
+    const _eqExtractCanvas = document.createElement('canvas');
+    _eqExtractCanvas.width = _eqExtractSize;
+    _eqExtractCanvas.height = _eqExtractSize;
+    const _eqExtractCtx = _eqExtractCanvas.getContext('2d', { willReadFrequently: true });
+    function extractDominantColor(img) {
+      if (!img || !img.naturalWidth) return null;
+      try {
+        const sz = _eqExtractSize;
+        _eqExtractCtx.clearRect(0, 0, sz, sz);
+        _eqExtractCtx.drawImage(img, 0, 0, sz, sz);
+        const data = _eqExtractCtx.getImageData(0, 0, sz, sz).data;
+        // 6³ = 216 possible buckets. Encoded as a single int key so the
+        // Map stays cheap (no string concat per pixel).
+        const buckets = new Map();
+        for (let i = 0; i < data.length; i += 4) {
+          const pr = data[i], pg = data[i+1], pb = data[i+2];
+          const lum = (pr + pg + pb) / 3;
+          if (lum < 20 || lum > 235) continue;          // skip near-black / near-white
+          const maxC = Math.max(pr, pg, pb);
+          const minC = Math.min(pr, pg, pb);
+          if (maxC - minC < 20) continue;                // skip near-gray
+          const k = ((pr >> 5) << 10) | ((pg >> 5) << 5) | (pb >> 5);
+          let b = buckets.get(k);
+          if (!b) { b = { count: 0, r: 0, g: 0, b: 0 }; buckets.set(k, b); }
+          b.count++; b.r += pr; b.g += pg; b.b += pb;
+        }
+        if (buckets.size === 0) return null;
+        // Score = count × (1 + 1.5×saturation). The bonus rewards
+        // distinctive colors over abundant-but-muted ones, which is
+        // closer to what Spotify et al. do — they pick the "look at
+        // me" color, not the mathematical center of mass.
+        let best = null, bestScore = -1;
+        for (const b of buckets.values()) {
+          const avgR = b.r / b.count;
+          const avgG = b.g / b.count;
+          const avgB = b.b / b.count;
+          const maxC = Math.max(avgR, avgG, avgB);
+          const minC = Math.min(avgR, avgG, avgB);
+          const sat = maxC === 0 ? 0 : (maxC - minC) / maxC;
+          const score = b.count * (1 + sat * 1.5);
+          if (score > bestScore) { bestScore = score; best = b; }
+        }
+        return [Math.round(best.r / best.count),
+                Math.round(best.g / best.count),
+                Math.round(best.b / best.count)];
+      } catch {
+        // Tainted canvas (cross-origin without CORS) or any other failure.
+        // The img tag has crossorigin="anonymous" and the host's CORS is
+        // wide open, but we guard anyway.
+        return null;
+      }
+    }
+
+    // Take a sampled RGB and derive a (top, bottom) pair for the two-tone
+    // bar gradient. Top sits in the bright/saturated quadrant; bottom is
+    // the same hue dropped to a darker lightness. Falls back to the
+    // Spotify-green pair when no usable color is found.
+    function deriveEqColors(rgb) {
+      if (!rgb) {
+        eqColorTop = EQ_DEFAULT_TOP;
+        eqColorBot = EQ_DEFAULT_BOT;
+        return;
+      }
+      const [h, s] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      // Floor the saturation so washed-out covers still produce a
+      // visible chroma swing. Cap it so highly-saturated covers don't
+      // produce neon eye-melt.
+      const boostS = Math.max(0.55, Math.min(0.9, s + 0.15));
+      eqColorTop = hslToRgb(h, boostS, 0.55);
+      eqColorBot = hslToRgb(h, boostS * 0.7, 0.28);
+    }
+
+    function updateEqColorsFromArt() {
+      // No-op when there's no art element rendered yet, or it's still
+      // loading. Caller re-invokes on 'load'.
+      const rgb = extractDominantColor(artEl);
+      deriveEqColors(rgb);
+    }
+
+    function invalidateEqLayoutCache() {
+      eqLayoutCache = null;
+    }
+
+    function eqResize() {
+      const rect = eqVisualizer.getBoundingClientRect();
+      eqCssW = rect.width;
+      eqCssH = rect.height;
+      invalidateEqLayoutCache();
+    }
+
+    function eqWanted() {
+      return (listeningMode && optListeningView === 2) || optEqBackground;
+    }
+
+    function eqRgba(c, a) {
+      return `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+    }
+
+    function eqPaletteColor(t, time) {
+      const paletteName = THEME_NAMES[optTheme];
+      const paletteFn = paletteName ? PRESET_PALETTES[paletteName] : null;
+      if (!paletteFn) return eqColorTop;
+      const wrapped = ((t % 1) + 1) % 1;
+      return paletteFn(wrapped, time);
+    }
+
+    function applyEqMode() {
+      eqVisualizer.classList.toggle('eq-mode-bars', optEqVisualizerMode === 0);
+      eqVisualizer.classList.toggle('eq-mode-radial', optEqVisualizerMode === 1);
+      eqVisualizer.classList.toggle('eq-mode-tunnel', optEqVisualizerMode === 2);
+      eqRadialLayer.style.display = optEqVisualizerMode === 1 ? '' : 'none';
+      eqTunnelLayer.style.display = optEqVisualizerMode === 2 ? '' : 'none';
+    }
+
+    // Apply the user's selected theme to the root element. Drives every
+    // accent color via the CSS custom properties declared on .theme-*
+    // classes. The "album" theme (index 0) is special — it doesn't use a
+    // class; instead JS writes the sampled cover color directly to the
+    // root's inline style so the accent tracks each new track.
+    function applyTheme() {
+      const cls = rootEl.classList;
+      // Strip any prior theme-* class — only one should be active at a time.
+      for (const c of Array.from(cls)) {
+        if (c.startsWith('theme-')) cls.remove(c);
+      }
+      // Clear inline overrides every time. The album branch re-sets them
+      // immediately; non-album themes leave them cleared so the CSS class
+      // values win.
+      rootEl.style.removeProperty('--theme-accent');
+      rootEl.style.removeProperty('--theme-accent-rgb');
+      rootEl.style.removeProperty('--theme-accent-fg');
+      rootEl.style.removeProperty('--theme-accent-dim');
+
+      const name = THEME_NAMES[optTheme];
+      if (name === null) {
+        // Album theme. eqColorTop / eqColorBot were already computed from
+        // the cover by deriveEqColors. Synthesize a foreground color by
+        // picking white or dark depending on which has more contrast
+        // against the accent (so the play-button glyph stays legible
+        // regardless of whether the album is pastel or saturated).
+        const ct = eqColorTop, cb = eqColorBot;
+        const luminance = (0.2126 * ct[0] + 0.7152 * ct[1] + 0.0722 * ct[2]) / 255;
+        const fg = luminance > 0.6 ? '#08130c' : '#ffffff';
+        rootEl.style.setProperty('--theme-accent', `rgb(${ct[0]},${ct[1]},${ct[2]})`);
+        rootEl.style.setProperty('--theme-accent-rgb', `${ct[0]}, ${ct[1]}, ${ct[2]}`);
+        rootEl.style.setProperty('--theme-accent-fg', fg);
+        rootEl.style.setProperty('--theme-accent-dim', `rgb(${cb[0]},${cb[1]},${cb[2]})`);
+      } else {
+        cls.add('theme-' + name);
+      }
+    }
+
+    function applyEqVisibility() {
+      const wantsFull = listeningMode && optListeningView === 2;
+      const wantsBg = optEqBackground && !wantsFull;
+      eqVisualizer.classList.toggle('show-full', wantsFull);
+      eqVisualizer.classList.toggle('show-bg', wantsBg);
+      rootEl.classList.toggle('eq-as-bg', wantsBg);
+      // Album-art-alongside-eq option. Only meaningful when eq is the
+      // background; in listening-equalizer mode (full submode) the CSS
+      // hides the cover regardless.
+      rootEl.classList.toggle('eq-show-art', wantsBg && optEqShowAlbumArt);
+      invalidateEqLayoutCache();
+      applyEqMode();
+      if (wantsFull || wantsBg) {
+        eqResize();
+        ensureEqStream();
+        renderEqFrame(1 / 60);
+      } else {
+        stopEqStream();
+      }
+    }
+
+    function ensureEqStream() {
+      if (eqStream) return;
+      try {
+        eqStream = new EventSource(HOST + '/api/audio/spectrum/stream');
+      } catch {
+        eqStream = null;
+        return;
+      }
+      eqStream.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (Array.isArray(data.bins)) {
+            const n = Math.min(EQ_BINS, data.bins.length);
+            for (let i = 0; i < n; i++) eqSpectrum[i] = data.bins[i];
+          }
+          eqBass = typeof data.bass === 'number' ? data.bass : 0;
+          eqMid = typeof data.mid === 'number' ? data.mid : 0;
+          eqTreble = typeof data.treble === 'number' ? data.treble : 0;
+          if (!eqWanted()) return;
+          const now = performance.now();
+          const icueFps = window.iCUE ? Number(window.iCUE.fpsLimit) : NaN;
+          const fps = Number.isFinite(icueFps) && icueFps > 0
+            ? Math.max(15, Math.min(60, icueFps))
+            : 60;
+          const intervalMs = 1000 / fps;
+          if (eqLastRenderAt && now - eqLastRenderAt < intervalMs * 0.75) return;
+          const dt = eqLastRenderAt ? Math.min(0.12, Math.max(0.001, (now - eqLastRenderAt) / 1000)) : intervalMs / 1000;
+          renderEqFrame(dt);
+          eqLastRenderAt = now;
+        } catch { /* drop bad frame */ }
+      };
+      // EventSource auto-reconnects on transient drops; nothing to do
+      // on error besides logging if needed.
+    }
+
+    function stopEqStream() {
+      if (eqStream) {
+        try { eqStream.close(); } catch { /* ignore */ }
+        eqStream = null;
+      }
+      // Decay the bars to zero so they don't freeze mid-pulse on close.
+      for (let i = 0; i < EQ_BINS; i++) {
+        eqSpectrum[i] = 0;
+      }
+      eqBass = 0;
+      eqMid = 0;
+      eqTreble = 0;
+      eqBeatHold = 0;
+      for (let i = 0; i < EQ_BAR_COUNT; i++) {
+        eqPeaks[i] = 0;
+        const parts = eqBars[i];
+        parts.bar.style.transform = 'scaleY(0)';
+        parts.reflect.style.transform = 'scaleY(0)';
+        parts.peak.style.opacity = '0';
+      }
+      for (const line of eqRadialLines) line.style.opacity = '0';
+      eqRadialCore.style.opacity = '0';
+      for (const poly of eqTunnelRings) poly.style.opacity = '0';
+      for (const line of eqTunnelSpokes) line.style.opacity = '0';
+      eqLastRenderAt = 0;
+    }
+
+    function renderEqFrame(dt) {
+      eqBeatHold = Math.max(Math.max(0, eqBeatHold - dt * 1.9), eqBass);
+      if (optEqVisualizerMode === 1) renderEqRadial(dt);
+      else if (optEqVisualizerMode === 2) renderEqTunnel(dt);
+      else renderEqBars(dt);
+    }
+
+    // Spectrum bars — atmosphere-style layout.
+    //
+    // Bars grow UP from a centered baseline (h*0.5), mirrored around the
+    // center so the loudest low/mid energy becomes the visual focus and
+    // higher frequencies fan out toward the edges. Below the baseline, a
+    // reflection extends DOWN and fades out.
+    //
+    // Two-tone gradient per bar: bright at top, darker bottom. The hue
+    // is derived from the current album cover (see deriveEqColors); a
+    // mid-cover change snaps the palette to the new album.
+    //
+    // Layout is cached so the spectrum stream can update bar transforms
+    // without forcing art/horizon geometry reads every frame.
+    function renderEqBars(dt) {
+      if (eqCssW <= 0 || eqCssH <= 0) eqResize();
+      const w = eqCssW;
+      const h = eqCssH;
+      if (w <= 0 || h <= 0) return;
+
+      const isFullMode = eqVisualizer.classList.contains('show-full');
+      const wantsArtLayout = rootEl.classList.contains('eq-as-bg')
+          && rootEl.classList.contains('eq-show-art');
+      const isWide = rootEl.classList.contains('size-wide');
+      const bgAlpha = isFullMode ? 1 : 0.42;
+      const pad = w * 0.04;
+
+      if (!eqLayoutCache
+          || eqLayoutCache.w !== w
+          || eqLayoutCache.h !== h
+          || eqLayoutCache.isFullMode !== isFullMode
+          || eqLayoutCache.wantsArtLayout !== wantsArtLayout
+          || eqLayoutCache.isWide !== isWide) {
+        // Baseline at the vertical center. Bars grow up from here. In
+        // background mode, cache the horizon/art geometry so the animation
+        // loop can paint without forcing layout every frame.
+        const baseY = h * 0.50;
+        let maxH = h * 0.42;
+        const cr = eqVisualizer.getBoundingClientRect();
+        const horizonEl = document.getElementById('horizon');
+        if (!isFullMode && horizonEl) {
+          const hr = horizonEl.getBoundingClientRect();
+          if (hr.height >= 0 && hr.width > 0) {
+            const horizonY = hr.top - cr.top + hr.height / 2;
+            const candidate = baseY - horizonY;
+            if (candidate > h * 0.10) maxH = Math.min(maxH, candidate);
+          }
+        }
+
+        let startX = pad;
+        let availableW = w - pad * 2;
+        let drawBaseY = baseY;
+        let drawMaxH = maxH;
+        let numBars = EQ_BINS;
+
+        if (wantsArtLayout) {
+          const ar = artEl.getBoundingClientRect();
+          if (ar.width > 0 && ar.height > 0) {
+            const edge = 10;
+            if (isWide) {
+              const artRightLocal = (ar.right - cr.left) + edge;
+              const stdSlot = (w - pad * 2) / EQ_BINS;
+              startX = Math.max(pad, artRightLocal);
+              availableW = Math.max(stdSlot * 4, w - pad - startX);
+              numBars = Math.max(8, Math.floor(availableW / stdSlot));
+            } else {
+              const artBottomLocal = (ar.bottom - cr.top) + edge;
+              const cap = Math.max(40, (h - artBottomLocal - 12) / 2);
+              drawMaxH = Math.min(maxH, cap);
+              drawBaseY = artBottomLocal + drawMaxH;
+              if (drawBaseY < h * 0.5) drawBaseY = h * 0.5;
+            }
+          }
+        }
+
+        eqLayoutCache = {
+          w, h, isFullMode, wantsArtLayout, isWide,
+          startX, availableW, drawBaseY, drawMaxH,
+          numBars,
+          reflectFactor: 1.0,
+        };
+
+        for (let i = 0; i < EQ_BAR_COUNT; i++) {
+          const parts = eqBars[i];
+          if (i >= numBars) {
+            parts.slot.style.display = 'none';
+            continue;
+          }
+          const slot = availableW / numBars;
+          const barW = slot * 0.72;
+          const x = startX + i * slot + (slot - barW) / 2;
+          parts.slot.style.display = 'block';
+          parts.slot.style.left = x.toFixed(2) + 'px';
+          parts.slot.style.width = barW.toFixed(2) + 'px';
+          parts.bar.style.bottom = (h - drawBaseY).toFixed(2) + 'px';
+          parts.bar.style.height = drawMaxH.toFixed(2) + 'px';
+          parts.reflect.style.top = drawBaseY.toFixed(2) + 'px';
+          parts.reflect.style.height = (drawMaxH * 1.0).toFixed(2) + 'px';
+          parts.peak.style.top = '0';
+        }
+      }
+
+      const drawBaseY = eqLayoutCache.drawBaseY;
+      const drawMaxH = eqLayoutCache.drawMaxH;
+      const numBars = eqLayoutCache.numBars;
+      const reflectFactor = eqLayoutCache.reflectFactor;
+
+      // Decide the per-bar color source. Album-derived (palette 0) reuses
+      // the same (top, bottom) pair for every bar — clean, atmospheric,
+      // tied to the cover. Preset palettes (1-5) sample a function per
+      // bar position AND with the elapsed time so the colors animate
+      // even during quiet passages.
+      const paletteName = THEME_NAMES[optTheme];
+      const paletteFn = paletteName ? PRESET_PALETTES[paletteName] : null;
+      const elapsed = performance.now() / 1000;
+
+      const rgba = (c, a) => `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+
+      for (let i = 0; i < numBars; i++) {
+        // Center-weighted, not perfectly mirrored: bass/low-mid lives near
+        // the middle, treble fans outward, and each side samples neighboring
+        // bins slightly differently so paired bars feel related but not cloned.
+        const center = (numBars - 1) / 2;
+        const dist = center > 0 ? Math.abs(i - center) / center : 0;
+        const baseBin = Math.round(Math.pow(dist, 1.35) * (EQ_BINS - 1));
+        const side = i < center ? -1 : 1;
+        const binIdx = Math.max(0, Math.min(EQ_BINS - 1, baseBin + eqBinOffsets[i]));
+        const neighborIdx = Math.max(0, Math.min(EQ_BINS - 1, binIdx + side * ((((i * 11) % 3) - 1))));
+        const centerLift = 0.38 + 0.62 * Math.pow(1 - dist, 0.55);
+        const v = (eqSpectrum[binIdx] * 0.78 + eqSpectrum[neighborIdx] * 0.22) * centerLift;
+        const bh = Math.min(drawMaxH, v * drawMaxH);
+        const peakDrop = drawMaxH * (isFullMode ? 0.95 : 0.7) * dt;
+        eqPeaks[i] = Math.max(eqPeaks[i] - peakDrop, bh);
+        const scale = drawMaxH > 0 ? Math.max(0, Math.min(1, bh / drawMaxH)) : 0;
+        const parts = eqBars[i];
+
+        // Resolve top + bottom colors for THIS bar.
+        let ct, cb;
+        if (paletteFn) {
+          ct = paletteFn(i / Math.max(1, numBars - 1), elapsed);
+          // Bottom = same color darkened to 40%. Keeps the per-bar hue
+          // identity while still giving each bar the two-tone gradient.
+          cb = [ct[0] * 0.4, ct[1] * 0.4, ct[2] * 0.4];
+        } else {
+          ct = eqColorTop;
+          cb = eqColorBot;
+        }
+
+        // Main bar: bright top → darker bottom (two-tone).
+        parts.bar.style.background =
+          `linear-gradient(to top, ${rgba(cb, 0.55 * bgAlpha)} 0%, ${rgba(ct, 0.92 * bgAlpha)} 60%, ${rgba(ct, bgAlpha)} 100%)`;
+        parts.bar.style.transform = `scaleY(${scale.toFixed(4)})`;
+
+        // Reflection below baseline: visible in both full EQ and background
+        // EQ, with no trailing frame ghosts. Falling peak caps are drawn
+        // separately so they decay cleanly without smearing the whole frame.
+        const reflH = bh * reflectFactor;
+        const reflectScale = drawMaxH > 0 ? Math.max(0, Math.min(1, reflH / drawMaxH)) : 0;
+        parts.reflect.style.background =
+          `linear-gradient(to bottom, ${rgba(cb, (isFullMode ? 0.38 : 0.55) * bgAlpha)} 0%, ${rgba(cb, (isFullMode ? 0.28 : 0.5) * bgAlpha)} 50%, ${rgba(cb, 0)} 100%)`;
+        parts.reflect.style.transform = `scaleY(${reflectScale.toFixed(4)})`;
+
+        if (eqPeaks[i] > 2) {
+          parts.peak.style.background = rgba(ct, (isFullMode ? 0.92 : 0.72) * bgAlpha);
+          parts.peak.style.transform = `translateY(${(drawBaseY - eqPeaks[i] - 3).toFixed(2)}px)`;
+          parts.peak.style.opacity = '1';
+        } else {
+          parts.peak.style.opacity = '0';
+        }
+      }
+    }
+
+    function renderEqRadial(dt) {
+      if (eqCssW <= 0 || eqCssH <= 0) eqResize();
+      const w = eqCssW;
+      const h = eqCssH;
+      if (w <= 0 || h <= 0) return;
+
+      const isFullMode = eqVisualizer.classList.contains('show-full');
+      const elapsed = performance.now() / 1000;
+      const cx = w / 2;
+      const cy = h / 2;
+      const minSide = Math.min(w, h);
+      const baseR = minSide * (isFullMode ? 0.15 : 0.11) * (1 + eqBass * 0.28);
+      const maxLen = minSide * (isFullMode ? 0.34 : 0.24);
+      const alpha = isFullMode ? 0.95 : 0.42;
+      const total = EQ_RADIAL_COUNT;
+      const rotation = elapsed * 0.08;
+
+      eqSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+      for (let s = 0; s < total; s++) {
+        const bin = s < EQ_BINS ? s : (total - 1 - s);
+        const v = eqSpectrum[Math.max(0, Math.min(EQ_BINS - 1, bin))];
+        const ang = (s / total) * Math.PI * 2 + rotation;
+        const len = baseR + v * maxLen;
+        const c = eqPaletteColor(bin / EQ_BINS, elapsed);
+        const line = eqRadialLines[s];
+        line.setAttribute('x1', (cx + Math.cos(ang) * baseR).toFixed(2));
+        line.setAttribute('y1', (cy + Math.sin(ang) * baseR).toFixed(2));
+        line.setAttribute('x2', (cx + Math.cos(ang) * len).toFixed(2));
+        line.setAttribute('y2', (cy + Math.sin(ang) * len).toFixed(2));
+        line.setAttribute('stroke', eqRgba(c, alpha));
+        line.setAttribute('stroke-width', (isFullMode ? 2.8 : 2.0).toFixed(2));
+        line.style.opacity = '1';
+      }
+
+      const coreColor = eqPaletteColor(0.5, elapsed);
+      eqRadialCore.setAttribute('cx', cx.toFixed(2));
+      eqRadialCore.setAttribute('cy', cy.toFixed(2));
+      eqRadialCore.setAttribute('r', (baseR * (0.62 + eqBeatHold * 0.35)).toFixed(2));
+      eqRadialCore.setAttribute('fill', eqRgba(coreColor, (isFullMode ? 0.24 : 0.14) + eqBeatHold * 0.28));
+      eqRadialCore.setAttribute('stroke', eqRgba(coreColor, isFullMode ? 0.45 : 0.24));
+      eqRadialCore.setAttribute('stroke-width', (1.5 + eqBass * 2.5).toFixed(2));
+      eqRadialCore.style.opacity = '1';
+    }
+
+    function renderEqTunnel(dt) {
+      if (eqCssW <= 0 || eqCssH <= 0) eqResize();
+      const w = eqCssW;
+      const h = eqCssH;
+      if (w <= 0 || h <= 0) return;
+
+      const isFullMode = eqVisualizer.classList.contains('show-full');
+      const elapsed = performance.now() / 1000;
+      const cx = w / 2;
+      const cy = h / 2;
+      const maxR = Math.hypot(w, h) * (isFullMode ? 0.58 : 0.46);
+      const speed = 1 + eqBass * 1.8;
+      const phase = (elapsed * 0.6 * speed) % 1;
+      const alphaScale = isFullMode ? 1 : 0.46;
+
+      eqSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+      for (let i = EQ_TUNNEL_RINGS - 1; i >= 0; i--) {
+        const k = (i + phase) / EQ_TUNNEL_RINGS;
+        const r = Math.pow(k, 2.15) * maxR + Math.min(w, h) * 0.045;
+        const rot = elapsed * 0.3 + i * 0.15 + eqMid * 1.1;
+        const c = eqPaletteColor(k + elapsed * 0.04, elapsed);
+        let points = '';
+        for (let s = 0; s < EQ_TUNNEL_SIDES; s++) {
+          const a = rot + (s / EQ_TUNNEL_SIDES) * Math.PI * 2;
+          const wobble = 1 + 0.055 * Math.sin(a * 3 + elapsed + eqTreble * 2);
+          const x = cx + Math.cos(a) * r * wobble;
+          const y = cy + Math.sin(a) * r * wobble;
+          points += `${x.toFixed(2)},${y.toFixed(2)} `;
+        }
+        const poly = eqTunnelRings[i];
+        poly.setAttribute('points', points.trim());
+        poly.setAttribute('stroke', eqRgba(c, Math.max(0, (1 - k) * 0.9 * alphaScale)));
+        poly.setAttribute('stroke-width', (1.4 + (1 - k) * 3.8 + eqBass * 2.6).toFixed(2));
+        poly.style.opacity = '1';
+      }
+
+      const spokeAlpha = Math.max(0, Math.min(1, (eqBeatHold - 0.12) * 1.8));
+      for (let s = 0; s < EQ_TUNNEL_SIDES; s++) {
+        const a = elapsed * 0.3 + (s / EQ_TUNNEL_SIDES) * Math.PI * 2;
+        const r = Math.min(w, h) * (0.24 + eqBeatHold * 0.18);
+        const c = eqPaletteColor(s / EQ_TUNNEL_SIDES + elapsed * 0.04, elapsed);
+        const line = eqTunnelSpokes[s];
+        line.setAttribute('x1', cx.toFixed(2));
+        line.setAttribute('y1', cy.toFixed(2));
+        line.setAttribute('x2', (cx + Math.cos(a) * r).toFixed(2));
+        line.setAttribute('y2', (cy + Math.sin(a) * r).toFixed(2));
+        line.setAttribute('stroke', eqRgba(c, spokeAlpha * alphaScale));
+        line.setAttribute('stroke-width', (1.0 + eqBass * 1.8).toFixed(2));
+        line.style.opacity = spokeAlpha > 0.01 ? '1' : '0';
+      }
+    }
+
+    // Re-measure the visualizer whenever the root cell does.
+    // ResizeObserver on rootEl already fires applyLayout; the EQ tracks
+    // the root naturally because it's positioned `inset: 0`. We piggyback
+    // on the existing observer further down for DPR/dimension sync.
+
+    // --- Listening (screensaver) mode -----------------------------------
+
+    function applyListeningMode() {
+      // Three classes drive the CSS. Always toggle all three so a mid-
+      // session option change re-syncs cleanly without a half-applied
+      // intermediate state.
+      rootEl.classList.toggle('listening-mode', listeningMode);
+      rootEl.classList.toggle('listening-lyrics',
+        listeningMode && optListeningView === 0);
+      rootEl.classList.toggle('listening-album',
+        listeningMode && optListeningView === 1);
+      rootEl.classList.toggle('listening-equalizer',
+        listeningMode && optListeningView === 2);
+      // Equalizer visibility depends on the same flags — recompute every
+      // time the listening state changes so the visualizer comes in / drops
+      // out as a unit.
+      applyEqVisibility();
+    }
+
+    function enterListeningMode() {
+      if (listeningMode) return;
+      listeningMode = true;
+      applyListeningMode();
+    }
+
+    function exitListeningMode() {
+      if (!listeningMode) return;
+      listeningMode = false;
+      applyListeningMode();
+    }
+
+    function bumpActivity() {
+      lastActivityAt = performance.now();
+      if (listeningMode) exitListeningMode();
+    }
+
+    // Any pointer / key / scroll interaction counts as "user is here" and
+    // resets the idle timer. passive:true so the listener never blocks the
+    // touch/scroll path. Bound at document level so it catches taps on
+    // buttons too — tapping a button intentionally exits listening mode
+    // and triggers the underlying action in the same gesture.
+    for (const ev of ['pointerdown', 'touchstart', 'wheel', 'keydown']) {
+      document.addEventListener(ev, bumpActivity, { passive: true });
+    }
+
+    // Idle-check tick. Fires every second so the resolution of the
+    // autoExpandAfterSec slider isn't ruined. Cheap — just two reads +
+    // a subtraction in steady state.
+    setInterval(() => {
+      if (!optAutoExpand) return;
+      if (listeningMode) return;
+      // Don't auto-expand if the user is mid-browse (playlists view). They
+      // were explicitly looking at something; an ambient takeover here
+      // feels rude.
+      if (currentView === 'playlists') return;
+      // Lyrics submode no longer hides anything — the bottom bar stays
+      // visible even when ambient (user preference: controls always
+      // reachable). So entering listening mode in lyrics submode is a
+      // no-op visually, but we still flip the class for future hooks.
+      // Album + equalizer submodes are the real "hide everything else"
+      // states.
+      const idleSec = (performance.now() - lastActivityAt) / 1000;
+      if (idleSec >= optAutoExpandAfterSec) enterListeningMode();
+    }, 1000);
+
+    function applyView() {
+      const hasLyrics = parsedLyrics.length > 0 && optShowLyrics;
+      // 'lyrics' is the implicit default — but if we don't have any to
+      // show, the list-view takes over and renders the queue. Tracking
+      // 'lyrics' separately from the queue/playlists choice means a
+      // track change can reset us back to "show lyrics if you have
+      // them" without forgetting that the user previously had us on
+      // the queue (we just re-evaluate every track).
+      const showList = currentView !== 'lyrics' || !hasLyrics;
+
+      lyricsEl.classList.toggle('hidden', showList);
+      listViewEl.classList.toggle('hidden', !showList);
+
+      // Browse-mode classes. playlists-mode is used by playlists +
+      // audio-source — full bottom-bar hide (and header-right hide so
+      // the up-next chip + queue button aren't visible while
+      // browsing). settings-mode is similar but KEEPS the header-right
+      // visible so the user can tap the settings button again to
+      // dismiss the panel.
+      rootEl.classList.toggle('playlists-mode',
+        currentView === 'playlists' || currentView === 'audio-source');
+      rootEl.classList.toggle('settings-mode', currentView === 'settings');
+
+      // Queue button is redundant when the queue is the visible content
+      // (tapping it would toggle to lyrics, but if there are no lyrics
+      // we'd be sent right back here — confusing). Hide it in that case.
+      // Stays visible when on lyrics, playlists, audio-source, or
+      // settings so the user can always jump to queue.
+      const queueIsCenter = showList
+        && currentView !== 'playlists'
+        && currentView !== 'audio-source'
+        && currentView !== 'settings';
+      queueBtn.classList.toggle('hidden', queueIsCenter);
+      // Active class mirrors the user's explicit choice, not the
+      // effective view — a lyrics-less track's auto-fallback shouldn't
+      // light the toggle up.
+      queueBtn.classList.toggle('active', currentView === 'queue');
+      settingsBtn.classList.toggle('active', currentView === 'settings');
+      libBtn.classList.toggle('active',
+        currentView === 'playlists' || currentView === 'audio-source');
+      // Lib button icon depends on currentView (back arrow in playlists
+      // view) — re-resolve every time the view changes.
+      setLibMode();
+
+      if (!showList) return;
+      if (currentView === 'playlists') {
+        renderPlaylistsList();
+      } else if (currentView === 'audio-source') {
+        renderAudioSourceList();
+      } else if (currentView === 'settings') {
+        renderSettingsList();
+      } else {
+        renderQueueList();
+      }
+    }
+
+    function renderQueueList() {
+      const frag = document.createDocumentFragment();
+
+      // No list-header here on purpose: the top-right "Up next" chip
+      // in the .header-row already communicates the queue context, so
+      // a second "Up next" label inside the list reads as duplication.
+      // (See user feedback after b7c3e1e.)
+
+      if (spotifyQueue.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'list-empty';
+        // Spotify's queue API can return empty for two distinct reasons:
+        //   - User genuinely has no queued tracks
+        //   - Spotify Connect hasn't activated the device yet (SMTC sees
+        //     audio, but Spotify cloud's "active device" slot is empty —
+        //     happens on fresh authorize, or when the desktop client
+        //     wasn't recently interacted with).
+        // We can't reliably tell the two apart from this side, so hint
+        // at both with a single message that nudges the user to interact
+        // with Spotify if needed.
+        empty.textContent = spotifyAuthed
+          ? 'Queue is empty. Play something in Spotify — or tap play/pause in the desktop client if it’s already going.'
+          : 'Connect Spotify to see the queue';
+        frag.appendChild(empty);
+      } else {
+        for (const t of spotifyQueue) {
+          const row = document.createElement('div');
+          row.className = 'list-row';
+          const img = document.createElement('img');
+          img.className = 'lr-art';
+          img.alt = '';
+          if (t.albumArtUrl) img.src = t.albumArtUrl;
+          const meta = document.createElement('div');
+          meta.className = 'lr-meta';
+          const name = document.createElement('div');
+          name.className = 'lr-name';
+          name.textContent = t.title || 'Unknown';
+          const sub = document.createElement('div');
+          sub.className = 'lr-sub';
+          sub.textContent = t.artist || '';
+          meta.appendChild(name);
+          meta.appendChild(sub);
+          row.appendChild(img);
+          row.appendChild(meta);
+          frag.appendChild(row);
+        }
+      }
+      listViewEl.textContent = '';
+      listViewEl.appendChild(frag);
+    }
+
+    function renderPlaylistsList() {
+      const frag = document.createDocumentFragment();
+
+      // Header: just a title now. The way back is the lib button in the
+      // bottom-right transport (whose icon swaps to a back arrow while
+      // currentView === 'playlists'). Tapping a playlist also auto-snaps
+      // back to lyrics, so the header doesn't need its own back chip.
+      const header = document.createElement('div');
+      header.className = 'list-header';
+      const title = document.createElement('div');
+      title.className = 'lh-title';
+      title.textContent = 'Your playlists';
+      header.appendChild(title);
+      frag.appendChild(header);
+
+      if (spotifyPlaylists.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'list-empty';
+        empty.textContent = spotifyAuthed
+          ? 'No playlists found'
+          : 'Connect Spotify to see your playlists';
+        frag.appendChild(empty);
+      } else {
+        // Alphabetize. Sort a copy so we don't mutate the stored array
+        // (the poller compares state by reference in some places).
+        // localeCompare with sensitivity:base + numeric so "Album 2"
+        // sorts before "Album 10" and casing doesn't split the list.
+        const sorted = spotifyPlaylists.slice().sort((a, b) =>
+          (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base', numeric: true }));
+        for (const pl of sorted) {
+          const row = document.createElement('button');
+          row.className = 'list-row';
+          row.type = 'button';
+          const img = document.createElement('img');
+          img.className = 'lr-art';
+          img.alt = '';
+          // SpotifyPlaylistDto serializes as `imageUrl` (the DTO field
+          // is ImageUrl, not AlbumArtUrl like SpotifyQueueItemDto).
+          // Falling back to albumArtUrl preserves compatibility if the
+          // host DTO is ever realigned.
+          const cover = pl.imageUrl || pl.albumArtUrl;
+          if (cover) img.src = cover;
+          const meta = document.createElement('div');
+          meta.className = 'lr-meta';
+          const name = document.createElement('div');
+          name.className = 'lr-name';
+          name.textContent = pl.name || 'Untitled';
+          const sub = document.createElement('div');
+          sub.className = 'lr-sub';
+          sub.textContent = (pl.trackCount || 0) + ' tracks';
+          meta.appendChild(name);
+          meta.appendChild(sub);
+          row.appendChild(img);
+          row.appendChild(meta);
+          row.addEventListener('click', () => {
+            if (pl.id) playPlaylist(pl.id);
+            // Snap back to lyrics/queue so the user sees the track
+            // they just kicked off, not the playlist list.
+            setView('lyrics');
+          });
+          frag.appendChild(row);
+        }
+      }
+      // Audio source picker entry — always available in the playlists
+      // view (auth-independent — the visualizer needs to work whether or
+      // not Spotify is connected, and the audio capture device is the
+      // user's choice regardless). Tap opens the audio-source sub-view.
+      const sourceRow = document.createElement('button');
+      sourceRow.className = 'list-row';
+      sourceRow.type = 'button';
+      sourceRow.style.marginTop = '8px';
+      sourceRow.style.borderTop = '1px solid rgba(255,255,255,0.08)';
+      sourceRow.style.paddingTop = '12px';
+      const srcIcon = document.createElement('div');
+      srcIcon.className = 'lr-art';
+      srcIcon.style.display = 'flex';
+      srcIcon.style.alignItems = 'center';
+      srcIcon.style.justifyContent = 'center';
+      srcIcon.style.fontSize = '20px';
+      srcIcon.textContent = '🔊';
+      const srcMeta = document.createElement('div');
+      srcMeta.className = 'lr-meta';
+      const srcName = document.createElement('div');
+      srcName.className = 'lr-name';
+      srcName.textContent = 'Equalizer audio source';
+      const srcSub = document.createElement('div');
+      srcSub.className = 'lr-sub';
+      srcSub.textContent = audioSourceActiveName || 'System default';
+      srcMeta.appendChild(srcName);
+      srcMeta.appendChild(srcSub);
+      sourceRow.appendChild(srcIcon);
+      sourceRow.appendChild(srcMeta);
+      sourceRow.addEventListener('click', () => {
+        audioSourceFrom = 'playlists';
+        setView('audio-source');
+      });
+      frag.appendChild(sourceRow);
+
+      // Disconnect lives at the bottom of the playlists list — only
+      // surfaced when the user is intentionally in the auth-affected
+      // view, so it's discoverable without being in the way of the
+      // common case (just tapping a playlist).
+      if (spotifyAuthed) {
+        const disconnect = document.createElement('button');
+        disconnect.className = 'list-row';
+        disconnect.type = 'button';
+        disconnect.style.marginTop = '8px';
+        disconnect.style.opacity = '0.65';
+        const icon = document.createElement('div');
+        icon.className = 'lr-art';
+        icon.style.display = 'flex';
+        icon.style.alignItems = 'center';
+        icon.style.justifyContent = 'center';
+        icon.style.fontSize = '18px';
+        icon.textContent = '⏻';
+        const meta = document.createElement('div');
+        meta.className = 'lr-meta';
+        const name = document.createElement('div');
+        name.className = 'lr-name';
+        name.textContent = 'Disconnect Spotify';
+        meta.appendChild(name);
+        disconnect.appendChild(icon);
+        disconnect.appendChild(meta);
+        disconnect.addEventListener('click', disconnectSpotify);
+        frag.appendChild(disconnect);
+      }
+      listViewEl.textContent = '';
+      listViewEl.appendChild(frag);
+    }
+
+    // Renders the audio-source sub-view: list of all active render
+    // endpoints, with the configured one highlighted. Tap a row to
+    // switch — the host immediately re-points its WASAPI loopback at
+    // the new device and persists the choice to %APPDATA% so it
+    // survives restarts. Designed for software-mixer setups
+    // (SteelSeries Sonar, Voicemeeter) where the Windows-default
+    // device isn't the one carrying music.
+    function renderAudioSourceList() {
+      const frag = document.createDocumentFragment();
+
+      const header = document.createElement('div');
+      header.className = 'list-header';
+      const title = document.createElement('div');
+      title.className = 'lh-title';
+      title.textContent = 'Equalizer audio source';
+      header.appendChild(title);
+      frag.appendChild(header);
+
+      // Always offer "system default" first — a reset path if a saved
+      // device is wrong / unavailable. Posting deviceId: null tells the
+      // host to clear the override.
+      const defaultRow = document.createElement('button');
+      defaultRow.className = 'list-row';
+      defaultRow.type = 'button';
+      const defIcon = document.createElement('div');
+      defIcon.className = 'lr-art';
+      defIcon.style.display = 'flex';
+      defIcon.style.alignItems = 'center';
+      defIcon.style.justifyContent = 'center';
+      defIcon.style.fontSize = '18px';
+      defIcon.textContent = '★';
+      const defMeta = document.createElement('div');
+      defMeta.className = 'lr-meta';
+      const defName = document.createElement('div');
+      defName.className = 'lr-name';
+      defName.textContent = 'System default';
+      const defSub = document.createElement('div');
+      defSub.className = 'lr-sub';
+      defSub.textContent = 'Follows the Windows playback default';
+      defMeta.appendChild(defName);
+      defMeta.appendChild(defSub);
+      defaultRow.appendChild(defIcon);
+      defaultRow.appendChild(defMeta);
+      defaultRow.addEventListener('click', () => setAudioSource(null));
+      frag.appendChild(defaultRow);
+
+      if (audioSources.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'list-empty';
+        empty.textContent = 'No render devices found.';
+        frag.appendChild(empty);
+      } else {
+        for (const d of audioSources) {
+          const row = document.createElement('button');
+          row.className = 'list-row';
+          row.type = 'button';
+          const icon = document.createElement('div');
+          icon.className = 'lr-art';
+          icon.style.display = 'flex';
+          icon.style.alignItems = 'center';
+          icon.style.justifyContent = 'center';
+          icon.style.fontSize = '18px';
+          // Currently capturing from this device → checkmark, else
+          // empty circle. The checkmark uses the theme accent color so
+          // it's visible against any theme.
+          if (d.id === audioSourceActiveId) {
+            icon.textContent = '✓';
+            icon.style.color = 'var(--theme-accent)';
+            icon.style.fontWeight = '700';
+          } else {
+            icon.textContent = '○';
+            icon.style.opacity = '0.4';
+          }
+          const meta = document.createElement('div');
+          meta.className = 'lr-meta';
+          const name = document.createElement('div');
+          name.className = 'lr-name';
+          name.textContent = d.name;
+          const sub = document.createElement('div');
+          sub.className = 'lr-sub';
+          sub.textContent = d.isDefault ? 'Windows default' : 'Render endpoint';
+          meta.appendChild(name);
+          meta.appendChild(sub);
+          row.appendChild(icon);
+          row.appendChild(meta);
+          row.addEventListener('click', () => setAudioSource(d.id));
+          frag.appendChild(row);
+        }
+      }
+
+      listViewEl.textContent = '';
+      listViewEl.appendChild(frag);
+    }
+
+    // --- Settings view ---------------------------------------------------
+    // Builds the in-widget settings UI from SETTING_SECTIONS. Each row's
+    // control writes back through updateSetting(key, value) which both
+    // fires the registered handler AND debounces a POST to the host
+    // settings endpoint.
+
+    function formatSliderValue(v, item) {
+      const num = Number(v) || 0;
+      const sign = item.signed ? (num > 0 ? '+' : num === 0 ? '+' : '') : '';
+      return sign + num + (item.unit ? ' ' + item.unit : '');
+    }
+
+    function renderSettingRow(item) {
+      const row = document.createElement('div');
+      row.className = 'settings-row settings-row-' + item.type;
+
+      const meta = document.createElement('div');
+      meta.className = 'settings-meta';
+      const name = document.createElement('div');
+      name.className = 'settings-name';
+      name.textContent = item.label;
+      meta.appendChild(name);
+      // For sliders, the sub-line doubles as the value display.
+      let valueDisplay = null;
+      if (item.type === 'slider') {
+        valueDisplay = document.createElement('div');
+        valueDisplay.className = 'settings-value';
+        valueDisplay.textContent = formatSliderValue(settings[item.key], item);
+        meta.appendChild(valueDisplay);
+      } else if (item.sub) {
+        const sub = document.createElement('div');
+        sub.className = 'settings-sub';
+        sub.textContent = item.sub;
+        meta.appendChild(sub);
+      }
+      row.appendChild(meta);
+
+      const value = settings[item.key];
+
+      if (item.type === 'switch') {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'settings-toggle';
+        btn.dataset.on = value ? '1' : '0';
+        const thumb = document.createElement('span');
+        thumb.className = 'settings-toggle-thumb';
+        btn.appendChild(thumb);
+        btn.addEventListener('click', () => {
+          const next = !settings[item.key];
+          btn.dataset.on = next ? '1' : '0';
+          updateSetting(item.key, next);
+        });
+        row.appendChild(btn);
+      } else if (item.type === 'segment') {
+        const seg = document.createElement('div');
+        seg.className = 'settings-seg';
+        for (const opt of item.options) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = opt.label;
+          if (opt.value === value) b.classList.add('active');
+          b.addEventListener('click', () => {
+            // Visual update is local — no full re-render needed.
+            for (const sib of seg.children) sib.classList.remove('active');
+            b.classList.add('active');
+            updateSetting(item.key, opt.value);
+          });
+          seg.appendChild(b);
+        }
+        row.appendChild(seg);
+      } else if (item.type === 'slider') {
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.className = 'settings-slider';
+        input.min = String(item.min);
+        input.max = String(item.max);
+        input.step = String(item.step);
+        input.value = String(value);
+        input.addEventListener('input', () => {
+          const v = Number(input.value);
+          if (valueDisplay) valueDisplay.textContent = formatSliderValue(v, item);
+          updateSetting(item.key, v);
+        });
+        row.appendChild(input);
+      }
+
+      return row;
+    }
+
+    function renderSettingsTabs() {
+      const tabs = document.createElement('div');
+      tabs.className = 'settings-tabs';
+      for (const tab of SETTING_TABS) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'settings-tab';
+        if (tab.id === settingsActiveTab) btn.classList.add('active');
+        btn.innerHTML =
+          '<svg viewBox="0 0 24 24" aria-hidden="true">' + tab.icon + '</svg>'
+          + '<span>' + tab.label + '</span>';
+        btn.addEventListener('click', () => {
+          settingsActiveTab = tab.id;
+          renderSettingsList();
+        });
+        tabs.appendChild(btn);
+      }
+      return tabs;
+    }
+
+    function renderSpotifyDisconnectRow() {
+      // Account-level action — dim red treatment so it reads as
+      // distinct from neutral options. Click → POSTs to /spotify/
+      // disconnect (host purges the token store) and the next poll
+      // flips spotifyAuthed back to false.
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'list-row';
+      row.style.marginTop = '8px';
+      row.style.borderTop = '1px solid rgba(255,255,255,0.08)';
+      row.style.paddingTop = '12px';
+      const icon = document.createElement('div');
+      icon.className = 'lr-art';
+      icon.style.display = 'flex';
+      icon.style.alignItems = 'center';
+      icon.style.justifyContent = 'center';
+      icon.style.fontSize = '22px';
+      icon.style.color = '#ff6b6b';
+      icon.textContent = '⏻';
+      const meta = document.createElement('div');
+      meta.className = 'lr-meta';
+      const name = document.createElement('div');
+      name.className = 'lr-name';
+      name.style.fontSize = '17px';
+      name.style.color = '#ff6b6b';
+      name.textContent = 'Disconnect Spotify';
+      const sub = document.createElement('div');
+      sub.className = 'lr-sub';
+      sub.style.fontSize = '14px';
+      sub.textContent = 'Sign out and clear stored tokens';
+      meta.appendChild(name);
+      meta.appendChild(sub);
+      row.appendChild(icon);
+      row.appendChild(meta);
+      row.addEventListener('click', disconnectSpotify);
+      return row;
+    }
+
+    function renderAudioSourceLinkRow() {
+      // Special-case row used in the Equalizer tab — opens the
+      // audio-source sub-view that lists Windows render endpoints.
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'list-row';
+      const icon = document.createElement('div');
+      icon.className = 'lr-art';
+      icon.style.display = 'flex';
+      icon.style.alignItems = 'center';
+      icon.style.justifyContent = 'center';
+      icon.style.fontSize = '20px';
+      icon.textContent = '🔊';
+      const meta = document.createElement('div');
+      meta.className = 'lr-meta';
+      const name = document.createElement('div');
+      name.className = 'lr-name';
+      name.style.fontSize = '17px';
+      name.textContent = 'Audio source';
+      const sub = document.createElement('div');
+      sub.className = 'lr-sub';
+      sub.style.fontSize = '14px';
+      sub.textContent = audioSourceActiveName || 'System default';
+      meta.appendChild(name);
+      meta.appendChild(sub);
+      row.appendChild(icon);
+      row.appendChild(meta);
+      row.addEventListener('click', () => {
+        audioSourceFrom = 'settings';
+        setView('audio-source');
+      });
+      return row;
+    }
+
+    function renderSettingsList() {
+      const frag = document.createDocumentFragment();
+      frag.appendChild(renderSettingsTabs());
+
+      const tab = SETTING_TABS.find(t => t.id === settingsActiveTab) || SETTING_TABS[0];
+      const sec = document.createElement('div');
+      sec.className = 'settings-section';
+      for (const item of tab.items) {
+        if (item.type === 'audio-source-link') {
+          sec.appendChild(renderAudioSourceLinkRow());
+        } else if (item.type === 'spotify-disconnect-link') {
+          // Only meaningful when authed — silently skip otherwise so
+          // the General tab doesn't leak a dead row.
+          if (spotifyAuthed) sec.appendChild(renderSpotifyDisconnectRow());
+        } else {
+          sec.appendChild(renderSettingRow(item));
+        }
+      }
+      frag.appendChild(sec);
+
+      listViewEl.textContent = '';
+      listViewEl.appendChild(frag);
+    }
+
+    function fmtTime(ms) {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      const m = Math.floor(s / 60);
+      const r = s - m * 60;
+      return m + ':' + (r < 10 ? '0' : '') + r;
+    }
+
+    function currentPosition() {
+      if (anchorAt === 0) return 0;
+      const elapsed = isPlaying ? Math.max(0, performance.now() - anchorAt) : 0;
+      const pos = anchorPosMs + elapsed;
+      return durationMs > 0 ? Math.min(pos, durationMs) : pos;
+    }
+
+    // --- LRC parser + marker insertion (ported from main) ---------------
+    function parseLrc(text) {
+      const out = [];
+      const stampRe = /\[(\d+):(\d+)(?:\.(\d+))?\]/g;
+      for (const raw of text.split('\n')) {
+        const stamps = [];
+        let lastIdx = 0;
+        let m;
+        stampRe.lastIndex = 0;
+        while ((m = stampRe.exec(raw)) !== null) {
+          const minutes = parseInt(m[1], 10);
+          const seconds = parseInt(m[2], 10);
+          const fracStr = m[3] || '0';
+          const frac = fracStr.length === 3 ? parseInt(fracStr, 10) : parseInt(fracStr, 10) * 10;
+          stamps.push((minutes * 60 + seconds) * 1000 + frac);
+          lastIdx = m.index + m[0].length;
+        }
+        const lineText = raw.slice(lastIdx).trim();
+        if (stamps.length === 0 || !lineText) continue;
+        for (const ms of stamps) out.push({ ms, text: lineText });
+      }
+      out.sort((a, b) => a.ms - b.ms);
+      return out;
+    }
+    function estimateLineDurationMs(text, gapMs) {
+      const chars = text.replace(/\s+/g, ' ').trim().length;
+      const naive = Math.max(1500, chars * 280);
+      return Math.min(naive, Math.max(1500, gapMs * 0.9));
+    }
+    function isExistingMarker(text) {
+      if (/^[\s♪-♯]+$/.test(text)) return true;
+      return /^\(?\s*(instrumental|interlude|music|guitar solo|outro|intro)\s*\)?$/i.test(text);
+    }
+    function addInstrumentalMarkers(lines, songDurationMs) {
+      if (lines.length === 0) return lines;
+      const NOTE = '♪';
+      const SILENCE_THRESHOLD_MS = 8000;
+      const SPACING_MS = 8000;
+      const LEAD_MS = 1000;
+      const TAIL_MS = 1500;
+      const out = [];
+      const insertGap = (start, end) => {
+        if (end - start < SILENCE_THRESHOLD_MS) return;
+        let t = start + LEAD_MS;
+        while (t + 250 < end - TAIL_MS) {
+          out.push({ ms: t, text: NOTE });
+          t += SPACING_MS;
+        }
+      };
+      insertGap(0, lines[0].ms);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        out.push(line);
+        const next = lines[i + 1];
+        if (!next) {
+          if (songDurationMs > 0) {
+            const trailingGap = songDurationMs - line.ms;
+            const sungEnds = line.ms + estimateLineDurationMs(line.text, trailingGap);
+            insertGap(sungEnds, songDurationMs);
+          }
+          break;
+        }
+        if (isExistingMarker(line.text) || isExistingMarker(next.text)) continue;
+        const gap = next.ms - line.ms;
+        const sungEnds = line.ms + estimateLineDurationMs(line.text, gap);
+        insertGap(sungEnds, next.ms);
+      }
+      out.sort((a, b) => a.ms - b.ms);
+      return out;
+    }
+
+    function clearLyrics() {
+      parsedLyrics = [];
+      lyricLineEls = [];
+      lyricsTrackEl = null;
+      currentLineIdx = -1;
+      lyricsEl.textContent = '';
+      applyView();
+    }
+
+    function renderLyrics(lines) {
+      const track = document.createElement('div');
+      track.className = 'track';
+      track.style.transition = 'none';
+      lyricLineEls = [];
+      for (let i = 0; i < lines.length; i++) {
+        const div = document.createElement('div');
+        div.className = 'line';
+        div.textContent = lines[i].text;
+        track.appendChild(div);
+        lyricLineEls.push(div);
+      }
+      lyricsEl.textContent = '';
+      lyricsEl.appendChild(track);
+      lyricsTrackEl = track;
+      requestAnimationFrame(() => {
+        if (lyricsTrackEl === track) track.style.transition = '';
+      });
+      applyView();
+    }
+
+    // Memory cache of LRClib responses keyed by `artist|title`. Stores the
+    // raw response object {found, syncedLyrics, ...} — the parseLrc +
+    // marker insertion happens at render time because it depends on
+    // durationMs which is per-track. ~50 entries cap so a really long
+    // session doesn't grow unbounded; LRU eviction by insertion order.
+    const lyricsCache = new Map();
+    const LYRICS_CACHE_MAX = 50;
+    function lyricsCacheKey(artist, title) {
+      return (artist || '') + '|' + (title || '');
+    }
+    function lyricsCachePut(key, value) {
+      if (lyricsCache.has(key)) lyricsCache.delete(key);  // re-insert for LRU
+      lyricsCache.set(key, value);
+      while (lyricsCache.size > LYRICS_CACHE_MAX) {
+        const oldest = lyricsCache.keys().next().value;
+        lyricsCache.delete(oldest);
+      }
+    }
+
+    async function loadLyricsResponse(artist, title, album) {
+      // Returns the host's /api/lyrics response object (or null on error).
+      // Hits memory cache first — only the FIRST request per track pays
+      // the network round-trip; prefetch from the queue means by the time
+      // a track actually plays, this should already be a cache hit.
+      const key = lyricsCacheKey(artist, title);
+      if (lyricsCache.has(key)) return lyricsCache.get(key);
+      try {
+        const url = HOST + '/api/lyrics?artist=' + encodeURIComponent(artist) +
+          '&title=' + encodeURIComponent(title) +
+          (album ? '&album=' + encodeURIComponent(album) : '');
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const data = await res.json();
+        lyricsCachePut(key, data);
+        return data;
+      } catch {
+        return null;
+      }
+    }
+
+    function prefetchLyricsForQueue() {
+      // Fire-and-forget prefetch of the next few queue tracks. Album is
+      // omitted because the queue items don't carry it — LRClib's match
+      // is fine without it for most cases (artist + title is the primary
+      // key); the active-track fetch on track-change still passes album.
+      if (!optShowLyrics) return;
+      const upcoming = spotifyQueue.slice(0, 5);
+      for (const t of upcoming) {
+        if (!t.artist || !t.title) continue;
+        const key = lyricsCacheKey(t.artist, t.title);
+        if (lyricsCache.has(key)) continue;
+        // Don't await — we want concurrent fan-out, and we don't care
+        // about the result here. The cache fill is the side effect.
+        void loadLyricsResponse(t.artist, t.title, '');
+      }
+    }
+
+    async function fetchLyricsFor(artist, title, album) {
+      const key = artist + '|' + title;
+      if (key === lyricsFetchKey) return;
+      lyricsFetchKey = key;
+      clearLyrics();
+      // Bail early when the user has lyrics off. We still set
+      // lyricsFetchKey above so toggling-on later triggers a fetch via
+      // the showLyrics callback (which clears the key for the same
+      // track and re-calls fetchLyricsFor). When lyrics are off, the
+      // queue auto-fallback in applyView takes over.
+      if (!optShowLyrics) { applyView(); return; }
+      const data = await loadLyricsResponse(artist, title, album);
+      if (key !== lyricsFetchKey) return;        // user changed track mid-fetch
+      if (data && data.found && data.syncedLyrics) {
+        const raw = parseLrc(data.syncedLyrics);
+        parsedLyrics = addInstrumentalMarkers(raw, durationMs);
+        renderLyrics(parsedLyrics);
+      } else {
+        applyView();
+      }
+    }
+
+    function updateCurrentLine(pos) {
+      if (parsedLyrics.length === 0 || !lyricsTrackEl) return;
+      // User-tunable offset for residual sync issues — positive value
+      // pushes lyrics earlier (use if highlighter feels behind), negative
+      // pushes them later. Wired to Behavior > Lyric sync offset.
+      const adjustedPos = pos + optLyricSyncOffsetMs;
+      let idx = currentLineIdx;
+      while (idx + 1 < parsedLyrics.length && parsedLyrics[idx + 1].ms <= adjustedPos) idx++;
+      while (idx >= 0 && parsedLyrics[idx].ms > adjustedPos) idx--;
+      if (idx === currentLineIdx) return;
+
+      if (currentLineIdx >= 0 && lyricLineEls[currentLineIdx]) {
+        lyricLineEls[currentLineIdx].classList.remove('current');
+        lyricLineEls[currentLineIdx].classList.add('past');
+      }
+      if (idx >= 0 && lyricLineEls[idx]) {
+        lyricLineEls[idx].classList.remove('past');
+        lyricLineEls[idx].classList.add('current');
+        const lineEl = lyricLineEls[idx];
+        const containerH = lyricsEl.clientHeight;
+        const lineCenter = lineEl.offsetTop + lineEl.offsetHeight / 2;
+        const offset = containerH / 2 - lineCenter;
+        lyricsTrackEl.style.transform = 'translateY(' + offset.toFixed(1) + 'px)';
+      }
+      currentLineIdx = idx;
+    }
+
+    function tick() {
+      const pos = currentPosition();
+      const ratio = durationMs > 0 ? pos / durationMs : 0;
+      const clamped = Math.max(0, Math.min(1, ratio));
+      if (Math.abs(clamped - lastFillRatio) > 0.001) {
+        fillEl.style.transform = 'scaleX(' + clamped.toFixed(4) + ')';
+        lastFillRatio = clamped;
+      }
+      const cur = fmtTime(pos);
+      const tot = fmtTime(durationMs);
+      if (cur !== lastCurTime) { setText(curTimeEl, cur); lastCurTime = cur; }
+      if (tot !== lastTotTime) { setText(totTimeEl, tot); lastTotTime = tot; }
+      updateCurrentLine(pos);
+    }
+
+    async function pollOnce() {
+      try {
+        // Host returns both SMTC position and the UTC moment that position
+        // was sampled/extrapolated. We map that wall-clock timestamp into
+        // this process' performance.now() timeline, so host work after the
+        // sample (album-art cache refresh, JSON serialization, localhost
+        // transport) doesn't become lyric-sync drift.
+        const [npRes, ssRes] = await Promise.all([
+          fetch(HOST + '/api/media/now-playing'),
+          fetch(HOST + '/api/spotify/status'),
+        ]);
+        if (!npRes.ok) throw new Error('now-playing HTTP ' + npRes.status);
+        if (!ssRes.ok) throw new Error('spotify/status HTTP ' + ssRes.status);
+        const np = await npRes.json();
+        const ss = await ssRes.json();
+        const fetchEnd = performance.now();
+
+        const wasAuthed = spotifyAuthed;
+        spotifyAuthed = !!ss.connected;
+        setLibMode();
+        // (No /api/spotify/playback poll here.) SMTC already gives us
+        // title/artist/album/position/duration/state for the local audio
+        // session, and that's all this widget consumes. /me/player was
+        // being fetched and thrown away every 1.5s — ~40 Spotify API calls
+        // per minute for no rendered output. The endpoint stays available
+        // on the host (some future "playing on [Device X]" affordance
+        // would want it), but the widget doesn't poll it.
+
+        // Auth flipped — kick the slow Spotify pollers (queue + playlists)
+        // immediately on first connect, and stop them on disconnect.
+        if (spotifyAuthed && !wasAuthed) {
+          pollSpotifyQueue();
+          pollSpotifyPlaylists();
+        } else if (!spotifyAuthed && wasAuthed) {
+          spotifyQueue = [];
+          spotifyPlaylists = [];
+          setUpnext('');
+          // If the user was on the playlists view when auth dropped,
+          // bounce them back to lyrics/queue — the playlists view has
+          // nothing to show without a token.
+          if (currentView === 'playlists') currentView = 'lyrics';
+          applyView();
+        }
+
+        const title = np.hasSession ? (np.title || 'Unknown title') : 'Nothing playing';
+        const artist = np.hasSession ? (np.artist || '') : '';
+        if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
+        if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
+        // Source line: visible only when Spotify is the SMTC source.
+        // (Other sources just don't show this line — title/artist alone is
+        // enough for non-Spotify SMTC playback.)
+        setSource(!!np.isSpotify && !!np.hasSession, np.album || '');
+        setArt(!!np.hasArt && !!np.hasSession, np.artVersion ?? 0);
+
+        const playing = np.status === 'Playing';
+        isPlaying = playing;
+        const canToggle = !!(np.canPlay || np.canPause);
+        setToggleState(playing, canToggle);
+        lastCanPrev = setBtnEnabled(prevBtn, !!np.canGoPrevious, lastCanPrev);
+        lastCanNext = setBtnEnabled(nextBtn, !!np.canGoNext, lastCanNext);
+
+        // Position anchor. Use serverPos at the host's sample time.
+        // Then apply a small constant slowdown — SMTC + Windows audio
+        // pipeline + speaker buffer typically adds ~30ms of latency between
+        // "where the file pointer is" and "what the listener hears". Without
+        // compensation the highlighter feels a hair too eager. Sign matters:
+        // this SUBTRACTS from the position so lyric lines hit later, which
+        // is the opposite direction from the old halfRoundTrip patch (that
+        // one added to the position and made lyrics earlier — wrong fix).
+        // The iCUE Lyric sync offset slider stacks on top for per-song tuning.
+        const PERCEPTUAL_LAG_MS = 30;
+        const rawPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
+        const serverPos = rawPos - PERCEPTUAL_LAG_MS;
+        durationMs = typeof np.durationMs === 'number' ? np.durationMs : 0;
+        const trackKey = (np.title || '') + '|' + (np.artist || '');
+        const capturedUtcMs = typeof np.positionCapturedAtUtcMs === 'number'
+          ? np.positionCapturedAtUtcMs
+          : 0;
+        const sampleAgeMs = capturedUtcMs > 0 ? Date.now() - capturedUtcMs : NaN;
+        const sampleAt = Number.isFinite(sampleAgeMs) && sampleAgeMs >= 0 && sampleAgeMs < 10_000
+          ? fetchEnd - sampleAgeMs
+          : fetchEnd;
+        const now = sampleAt;
+        const trackChanged = trackKey !== lastTrackKey;
+        if (anchorAt === 0 || trackChanged) {
+          anchorPosMs = serverPos;
+          anchorAt = now;
+          lastTrackKey = trackKey;
+        } else {
+          const localExtrap = isPlaying ? anchorPosMs + (now - anchorAt) : anchorPosMs;
+          const delta = serverPos - localExtrap;
+          if (delta > SEEK_THRESHOLD_FORWARD || delta < -SEEK_THRESHOLD_BACKWARD) {
+            anchorPosMs = serverPos;
+            anchorAt = now;
+          }
+        }
+
+        // Track current metadata for the showLyrics toggle handler — it
+        // needs to fetch lyrics for the *currently-playing* track when
+        // the user flips the option on, without waiting for a track
+        // change.
+        currentArtist = artist;
+        currentTitle = title;
+        currentAlbum = np.album || '';
+
+        // Track change resets the user out of any explicit
+        // queue/playlists view back to lyrics — feels jarring if the
+        // queue stays up after the next-track-up has finished and is
+        // now actually playing.
+        if (trackChanged && currentView !== 'lyrics') {
+          currentView = 'lyrics';
+        }
+        if (trackChanged && np.hasSession && artist && title) {
+          fetchLyricsFor(artist, title, np.album || '');
+        } else if (!np.hasSession) {
+          clearLyrics();
+          currentArtist = '';
+          currentTitle = '';
+          currentAlbum = '';
+        }
+
+        statusEl?.classList.remove('err');
+        if (statusEl) statusEl.textContent = 'media v2';
+        flashPulse();
+      } catch (e) {
+        statusEl?.classList.add('err');
+        if (statusEl) statusEl.textContent = 'host offline · ' + (e.message || 'unknown error');
+      }
+    }
+
+    artEl.addEventListener('error', () => {
+      artEl.classList.add('empty');
+      lastHasArt = false;
+      invalidateEqLayoutCache();
+      // No cover → fall back to default green palette for the EQ.
+      deriveEqColors(null);
+      // Album theme also re-syncs to the default green accent.
+      if (optTheme === 0) applyTheme();
+    });
+    // On every album-art change, re-derive the equalizer's two-tone
+    // gradient from the new cover. extractDominantColor uses 32×32 of
+    // pixel data which is cheap (~30µs) so doing it on every load is
+    // fine. CORS lets the canvas read the cross-origin host response.
+    // For the Album theme, also refresh the global accent so the play
+    // button / progress fill / current lyric color all shift with the
+    // new cover.
+    artEl.addEventListener('load', () => {
+      invalidateEqLayoutCache();
+      updateEqColorsFromArt();
+      if (optTheme === 0) applyTheme();
+    });
+
+    // Register Settings handlers. Each registerSetting() fires its handler
+    // once immediately with the default value, then again when loadSettings
+    // resolves with the host-backed value (if different), and again every
+    // time the user changes the value via the in-widget Settings view.
+    registerSetting('pollIntervalMs', value => {
+      const n = Number(value);
+      pollIntervalMs = Number.isFinite(n) ? Math.max(500, Math.min(5000, n)) : 1500;
+      // Restart the interval so the new cadence takes effect immediately
+      // rather than waiting up to the OLD interval first.
+      if (pollTimer) startPollTimer();
+    });
+    registerSetting('autoExpand', value => {
+      optAutoExpand = value !== false;
+    });
+    registerSetting('autoExpandAfterSec', value => {
+      const n = Number(value);
+      optAutoExpandAfterSec = Number.isFinite(n) ? n : 30;
+    });
+    registerSetting('showLyrics', value => {
+      optShowLyrics = value !== false;
+      if (!optShowLyrics) {
+        // Toggling off: clear the rendered lyric list and drop the
+        // fetch key so re-enabling later triggers a fresh fetch on
+        // the same track. clearLyrics → applyView falls through to
+        // the queue list automatically.
+        clearLyrics();
+        lyricsFetchKey = '';
+      } else {
+        // Toggling on: drop the fetch key AND fetch directly for the
+        // currently-playing track. Without the direct fetch, we'd wait
+        // for the next track change before lyrics reappeared.
+        lyricsFetchKey = '';
+        if (currentArtist && currentTitle) {
+          fetchLyricsFor(currentArtist, currentTitle, currentAlbum);
+        } else {
+          // No active track to fetch for — but we still need to
+          // re-evaluate the view so any visible queue stays consistent.
+          applyView();
+        }
+      }
+    });
+    registerSetting('lyricSyncOffsetMs', value => {
+      const n = Number(value);
+      optLyricSyncOffsetMs = Number.isFinite(n) ? n : 0;
+    });
+    registerSetting('listeningView', value => {
+      const n = Number(value);
+      optListeningView = Number.isFinite(n) ? Math.max(0, Math.min(2, Math.round(n))) : 0;
+      // Re-apply if we're currently in listening mode so the user sees the
+      // submode change immediately without having to wait for idle to flip.
+      if (listeningMode) applyListeningMode();
+      // EQ visibility tracks listeningView even outside listening mode (so
+      // toggling the option mid-session still produces the right visualizer
+      // state — most notably, dropping the EQ stream when leaving submode 2).
+      applyEqVisibility();
+    });
+    registerSetting('eqBackground', value => {
+      optEqBackground = value === true || value === 'true';
+      applyEqVisibility();
+    });
+    registerSetting('theme', value => {
+      const n = Number(value);
+      optTheme = Number.isFinite(n) ? Math.max(0, Math.min(5, Math.round(n))) : 0;
+      applyTheme();
+      invalidateEqLayoutCache();
+    });
+    registerSetting('eqVisualizerMode', value => {
+      const n = Number(value);
+      optEqVisualizerMode = Number.isFinite(n) ? Math.max(0, Math.min(2, Math.round(n))) : 0;
+      applyEqMode();
+      invalidateEqLayoutCache();
+      if (eqWanted()) renderEqFrame(1 / 60);
+    });
+    registerSetting('eqShowAlbumArt', value => {
+      optEqShowAlbumArt = value === true || value === 'true';
+      applyEqVisibility();
+    });
+
+    // Kick the initial settings load — fires every handler with the
+    // host-backed value (if different from the default). Not awaited:
+    // the polling / rendering below operates on the defaults until the
+    // first GET response lands, then re-fires.
+    void loadSettings();
+
+    pollOnce();
+    startPollTimer();
+    setInterval(tick, TICK_MS);
+    // Slow Spotify pollers — separate cadences from the main 1.5s poll.
+    // Queue refreshes every 10s; playlists every 10 min (host caches 30 min,
+    // and Spotify rate-limits /me/playlists hard if hammered).
+    queueTimer = setInterval(pollSpotifyQueue, SPOTIFY_QUEUE_MS);
+    playlistsTimer = setInterval(pollSpotifyPlaylists, SPOTIFY_PLAYLISTS_MS);
+  </script>
+</body>
+</html>

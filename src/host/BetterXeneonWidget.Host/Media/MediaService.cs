@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Runtime.Versioning;
+using BetterXeneonWidget.Host.Spotify;
 using Windows.Media.Control;
 using Windows.Storage.Streams;
 
@@ -20,13 +21,22 @@ public sealed class MediaService
 {
     private GlobalSystemMediaTransportControlsSessionManager? _manager;
     private readonly SemaphoreSlim _initLock = new(1, 1);
+    private readonly SpotifyService _spotify;
+    private readonly HttpClient _artHttp;
 
     // Album-art cache. Keyed by source-app id; bytes stay valid until either
     // the title changes (track change) or another app takes over the session.
     private readonly object _artLock = new();
+    private readonly SemaphoreSlim _artRefreshLock = new(1, 1);
     private byte[]? _artBytes;
     private string _artKey = string.Empty;
     private long _artVersion;
+
+    public MediaService(SpotifyService spotify, IHttpClientFactory httpFactory)
+    {
+        _spotify = spotify;
+        _artHttp = httpFactory.CreateClient("spotify");
+    }
 
     private async Task<GlobalSystemMediaTransportControlsSessionManager?> GetManagerAsync()
     {
@@ -80,6 +90,7 @@ public sealed class MediaService
         var isSpotify = sourceId.IndexOf("Spotify", StringComparison.OrdinalIgnoreCase) >= 0;
         var status = info?.PlaybackStatus.ToString() ?? "Unknown";
 
+        var positionCapturedAt = DateTimeOffset.UtcNow;
         long posMs = 0, durMs = 0;
         if (timeline is not null)
         {
@@ -90,7 +101,7 @@ public sealed class MediaService
 
             if (status == "Playing")
             {
-                var ageMs = (DateTimeOffset.UtcNow - timeline.LastUpdatedTime).TotalMilliseconds;
+                var ageMs = (positionCapturedAt - timeline.LastUpdatedTime).TotalMilliseconds;
                 // Sanity-bound: never extrapolate by more than 2 minutes (the
                 // source has clearly desynced) or use a negative value
                 // (clock skew). Cap at duration too — Spotify often leaves
@@ -108,7 +119,7 @@ public sealed class MediaService
         var artist = props.Artist ?? string.Empty;
         var album = props.AlbumTitle ?? string.Empty;
 
-        await UpdateArtCacheAsync(sourceId, title, props.Thumbnail).ConfigureAwait(false);
+        await UpdateArtCacheAsync(sourceId, title, artist, album, isSpotify, props.Thumbnail).ConfigureAwait(false);
 
         var hasArt = false;
         long artVer;
@@ -133,7 +144,8 @@ public sealed class MediaService
             CanGoNext: controls?.IsNextEnabled ?? false,
             CanGoPrevious: controls?.IsPreviousEnabled ?? false,
             PositionMs: posMs,
-            DurationMs: durMs);
+            DurationMs: durMs,
+            PositionCapturedAtUtcMs: positionCapturedAt.ToUnixTimeMilliseconds());
     }
 
     /// <summary>
@@ -205,41 +217,93 @@ public sealed class MediaService
 
     private static string BuildArtKey(string source, string title) => $"{source}|{title}";
 
-    private async Task UpdateArtCacheAsync(string source, string title, IRandomAccessStreamReference? thumbRef)
+    private async Task UpdateArtCacheAsync(
+        string source,
+        string title,
+        string artist,
+        string album,
+        bool isSpotify,
+        IRandomAccessStreamReference? thumbRef)
     {
         var key = BuildArtKey(source, title);
-        bool needsRefresh;
+        bool trackChanged;
         lock (_artLock)
         {
-            needsRefresh = key != _artKey;
+            trackChanged = key != _artKey;
         }
-        if (!needsRefresh) return;
+        if (!trackChanged) return;
 
-        byte[]? bytes = null;
-        if (thumbRef is not null)
+        await _artRefreshLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            try
+            lock (_artLock)
             {
-                using var stream = await thumbRef.OpenReadAsync();
-                if (stream is { Size: > 0 })
+                if (key == _artKey) return;
+            }
+
+            byte[]? bytes = null;
+
+            if (isSpotify)
+            {
+                try
                 {
-                    var buffer = new byte[checked((int)stream.Size)];
-                    var ibuf = buffer.AsBuffer();
-                    await stream.ReadAsync(ibuf, ibuf.Capacity, InputStreamOptions.None);
-                    bytes = buffer;
+                    var sp = await _spotify.GetPlaybackAsync().ConfigureAwait(false);
+                    var sameTitle = string.Equals(sp.Title, title, StringComparison.OrdinalIgnoreCase);
+                    var sameAlbum = string.IsNullOrWhiteSpace(album)
+                        || string.Equals(sp.Album, album, StringComparison.OrdinalIgnoreCase);
+                    var sameArtist = string.IsNullOrWhiteSpace(artist)
+                        || (!string.IsNullOrWhiteSpace(sp.Artist)
+                            && (sp.Artist.IndexOf(artist, StringComparison.OrdinalIgnoreCase) >= 0
+                                || artist.IndexOf(sp.Artist, StringComparison.OrdinalIgnoreCase) >= 0));
+
+                    if (sp.HasSession && sameTitle && (sameAlbum || sameArtist) && !string.IsNullOrWhiteSpace(sp.AlbumArtUrl))
+                    {
+                        using var res = await _artHttp.GetAsync(sp.AlbumArtUrl).ConfigureAwait(false);
+                        if (res.IsSuccessStatusCode)
+                        {
+                            var candidate = await res.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                            if (candidate.Length is > 0 and <= 2_000_000)
+                            {
+                                bytes = candidate;
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    bytes = null;
                 }
             }
-            catch
+
+            if (bytes is null && thumbRef is not null)
             {
-                bytes = null;
+                try
+                {
+                    using var stream = await thumbRef.OpenReadAsync();
+                    if (stream is { Size: > 0 })
+                    {
+                        var buffer = new byte[checked((int)stream.Size)];
+                        var ibuf = buffer.AsBuffer();
+                        await stream.ReadAsync(ibuf, ibuf.Capacity, InputStreamOptions.None);
+                        bytes = buffer;
+                    }
+                }
+                catch
+                {
+                    bytes = null;
+                }
+            }
+
+            lock (_artLock)
+            {
+                _artBytes = bytes;
+                _artKey = key;
+                _artVersion++;
             }
         }
-
-        lock (_artLock)
+        finally
         {
-            _artBytes = bytes;
-            _artKey = key;
-            _artVersion++;
+            _artRefreshLock.Release();
         }
     }
 
@@ -258,5 +322,6 @@ public sealed class MediaService
         CanGoNext: false,
         CanGoPrevious: false,
         PositionMs: 0,
-        DurationMs: 0);
+        DurationMs: 0,
+        PositionCapturedAtUtcMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 }

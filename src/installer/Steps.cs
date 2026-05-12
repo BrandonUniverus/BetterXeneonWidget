@@ -8,8 +8,11 @@ internal static class Steps
     private const string LauncherName = "launcher.vbs";
     private const string OAuthForwardName = "oauth-forward.vbs";
     private const string AppsettingsName = "appsettings.json";
+    private const string AppsettingsLocalName = "appsettings.Local.json";
     private const string AudioWidget = "com-betterxeneon-audioswitcher.icuewidget";
-    private const string MediaWidget = "com-betterxeneon-media.icuewidget";
+    // v2 is the shipping media widget (vanilla JS rebuild). v1 lives in
+    // archive/v1-fallback-phase-7.5/ for emergency rollback only.
+    private const string MediaWidget = "com-betterxeneon-media-v2.icuewidget";
 
     public static void Install()
     {
@@ -48,6 +51,30 @@ internal static class Steps
         {
             Resources.ExtractTo(AppsettingsName, appsettingsPath);
             Pretty.Detail($"Wrote {AppsettingsName}");
+        }
+
+        // appsettings.Local.json is the per-build dev override (e.g. a private
+        // Spotify ClientId). Present in the payload only when the dev machine
+        // had one at publish time. ASP.NET Core's layered config loads it
+        // after the base file, so its values override appsettings.json.
+        // PRESERVE existing files on reinstall — same rule as appsettings.json.
+        // Earlier this always overwrote, which would silently stomp another
+        // machine's working ClientId when an installer built on a different
+        // dev machine was run there. Devs that want to push a new override
+        // can either delete the live file before reinstall, or edit it
+        // in place.
+        if (Resources.HasEntry(AppsettingsLocalName))
+        {
+            var localPath = Path.Combine(installDir, AppsettingsLocalName);
+            if (File.Exists(localPath))
+            {
+                Pretty.Detail($"Preserved existing {AppsettingsLocalName}");
+            }
+            else
+            {
+                Resources.ExtractTo(AppsettingsLocalName, localPath);
+                Pretty.Detail($"Wrote {AppsettingsLocalName} (dev override)");
+            }
         }
 
         Pretty.Step("Registering Spotify OAuth URI handler (betterxeneonwidget://)...");

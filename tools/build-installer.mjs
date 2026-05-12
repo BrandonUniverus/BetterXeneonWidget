@@ -34,7 +34,11 @@ run('node', [join(here, 'publish-host.mjs')]);
 
 step('2/5 Packaging widgets');
 run('npm', ['run', 'package:audio-switcher'], { shell: true });
-run('npm', ['run', 'package:media'], { shell: true });
+// Media-v2 (vanilla JS rebuild) is the shipping media widget. v1 (Svelte)
+// is preserved in the repo for reference but no longer bundled — see
+// archive/v1-fallback-phase-7.5/ for the last-known-good v1 build if it's
+// ever needed standalone.
+run('node', [join(repoRoot, 'src', 'widgets', 'betterxeneon-media-v2', 'scripts', 'package.mjs')]);
 
 step('3/5 Building payload.zip');
 mkdirSync(installerResourcesDir, { recursive: true });
@@ -47,10 +51,22 @@ const payloadFiles = [
   join(distHost, 'oauth-forward.vbs'),
   join(distHost, 'appsettings.json'),
   join(distDir, 'com-betterxeneon-audioswitcher.icuewidget'),
-  join(distDir, 'com-betterxeneon-media.icuewidget'),
+  join(distDir, 'com-betterxeneon-media-v2.icuewidget'),
 ];
 for (const f of payloadFiles) {
   if (!existsSync(f)) throw new Error(`Missing artifact for payload: ${f}`);
+}
+
+// Optionally include appsettings.Local.json when present in the published
+// host bundle. This file is gitignored — it carries a dev-only override
+// (e.g. a private Spotify ClientId) and is only here when the dev machine
+// produced one. Letting the installer carry it makes the dogfood build
+// fully runnable on the dev machine without a post-install config edit;
+// a clean CI build won't have it and ships without.
+const localSettings = join(distHost, 'appsettings.Local.json');
+if (existsSync(localSettings)) {
+  payloadFiles.push(localSettings);
+  console.log('Including appsettings.Local.json in payload (dev override).');
 }
 
 // Compress-Archive can't take a flat list directly without -Path globs,
