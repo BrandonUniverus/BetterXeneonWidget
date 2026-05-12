@@ -50,6 +50,10 @@ try
     builder.Services.AddSingleton<IconCache>();
     builder.Services.AddSingleton<ConfigService>();
     builder.Services.AddSingleton<MediaService>();
+    // Audio spectrum (WASAPI loopback + FFT). Constructor starts capture
+    // eagerly so by the time the first client hits the stream endpoint
+    // there's already real data flowing.
+    builder.Services.AddSingleton<AudioSpectrumService>();
 
     builder.Services.Configure<SpotifyOptions>(builder.Configuration.GetSection("Spotify"));
     builder.Services.AddSingleton<SpotifyTokenStore>();
@@ -74,11 +78,18 @@ try
     app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "betterxeneon-host" }));
 
     app.MapAudioEndpoints();
+    app.MapAudioSpectrumEndpoints();
     app.MapSystemEndpoints();
     app.MapConfigEndpoints();
     app.MapMediaEndpoints();
     app.MapSpotifyEndpoints();
     app.MapLyricsEndpoints();
+
+    // Touch the spectrum service so its constructor (which starts WASAPI
+    // capture) runs at startup rather than on first request. Lazy
+    // construction would mean the first SSE client sees ~50ms of empty
+    // bars while the capture warms up.
+    _ = app.Services.GetRequiredService<AudioSpectrumService>();
 
     app.Logger.LogInformation("Listening on http://127.0.0.1:{Port}", httpPort);
 

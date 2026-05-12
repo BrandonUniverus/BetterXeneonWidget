@@ -271,6 +271,70 @@ public sealed class SpotifyService
 
     public void Disconnect() => _store.Clear();
 
+    /// <summary>
+    /// Lists every Spotify Connect device Spotify's cloud has registered for
+    /// the current account. Diagnostic — when /me/player returns no session,
+    /// this tells us whether the desktop client is even known to the cloud.
+    /// </summary>
+    public async Task<IReadOnlyList<SpotifyDeviceDto>> GetDevicesAsync()
+    {
+        var token = await GetValidAccessTokenAsync();
+        if (token is null) return Array.Empty<SpotifyDeviceDto>();
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/me/player/devices");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var res = await _http.SendAsync(req);
+            if (!res.IsSuccessStatusCode) return Array.Empty<SpotifyDeviceDto>();
+            await using var stream = await res.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(stream);
+            if (!doc.RootElement.TryGetProperty("devices", out var devicesEl)
+                || devicesEl.ValueKind != JsonValueKind.Array) return Array.Empty<SpotifyDeviceDto>();
+            var result = new List<SpotifyDeviceDto>(devicesEl.GetArrayLength());
+            foreach (var d in devicesEl.EnumerateArray())
+            {
+                var id = d.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+                var name = d.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+                var type = d.TryGetProperty("type", out var tEl) ? tEl.GetString() ?? "" : "";
+                var active = d.TryGetProperty("is_active", out var aEl) && aEl.ValueKind == JsonValueKind.True;
+                var restricted = d.TryGetProperty("is_restricted", out var rEl) && rEl.ValueKind == JsonValueKind.True;
+                result.Add(new SpotifyDeviceDto(id ?? "", name, type, active, restricted));
+            }
+            return result;
+        }
+        catch
+        {
+            return Array.Empty<SpotifyDeviceDto>();
+        }
+    }
+
+    /// <summary>
+    /// Force-activates a Spotify Connect device by transferring playback to
+    /// it. Used to wake up the desktop client when it's playing locally but
+    /// not currently the cloud-visible active device. play=false matches
+    /// Spotify's "keep current state" semantics so we don't accidentally
+    /// start playing when the user had paused.
+    /// </summary>
+    public async Task<bool> TransferPlaybackAsync(string deviceId, bool play = false)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId)) return false;
+        var token = await GetValidAccessTokenAsync();
+        if (token is null) return false;
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Put, $"{ApiBase}/me/player");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            var body = JsonSerializer.Serialize(new { device_ids = new[] { deviceId }, play });
+            req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var res = await _http.SendAsync(req);
+            return res.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public async Task<IReadOnlyList<SpotifyQueueItemDto>> GetQueueAsync()
     {
         if (DateTimeOffset.UtcNow < _playbackBlockedUntil) return Array.Empty<SpotifyQueueItemDto>();

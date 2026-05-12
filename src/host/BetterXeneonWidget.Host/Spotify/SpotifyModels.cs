@@ -47,6 +47,19 @@ public sealed record SpotifyPlaylistDto(
     string? ImageUrl,
     int TrackCount);
 
+/// <summary>
+/// One row from /me/player/devices. The widget renders this when /me/player
+/// reports no active session but SMTC sees Spotify playing — usually means
+/// the desktop client is "known" to Spotify Connect but not currently the
+/// active device. Activating it (PUT /me/player) restores queue + playback.
+/// </summary>
+public sealed record SpotifyDeviceDto(
+    string Id,
+    string Name,
+    string Type,           // "Computer", "Smartphone", "Speaker", ...
+    bool IsActive,
+    bool IsRestricted);
+
 // --- Spotify Web API responses (camelCase JSON via System.Text.Json) ---
 
 internal sealed record TokenResponse(

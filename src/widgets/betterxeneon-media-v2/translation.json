@@ -7,5 +7,7 @@
   "Idle delay before expanding (seconds)": "Idle delay before expanding (seconds)",
   "Show synced lyrics in listening view": "Show synced lyrics in listening view",
   "Lyric sync offset (ms)": "Lyric sync offset (ms)",
-  "Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer dev)": "Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer dev)"
+  "Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer dev)": "Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer dev)",
+  "Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer)": "Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer)",
+  "Use equalizer as background (instead of album art blur)": "Use equalizer as background (instead of album art blur)"
 }

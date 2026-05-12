@@ -1,3 +1,9 @@
+// The project's `BetterXeneonWidget.Host.System` namespace shadows the BCL
+// `System.*` namespaces inside this file, so the standard `System.Text.Json.*`
+// references would fail to resolve. Importing via alias dodges that without
+// having to global:: every type. Same pattern SpotifyService.cs uses.
+using SysJson = global::System.Text.Json;
+
 namespace BetterXeneonWidget.Host.Spotify;
 
 public static class SpotifyEndpoints
@@ -43,6 +49,46 @@ public static class SpotifyEndpoints
         group.MapGet("/queue", async (SpotifyService svc) => await svc.GetQueueAsync());
         group.MapGet("/recently-played", async (SpotifyService svc) => await svc.GetRecentlyPlayedAsync());
         group.MapGet("/playlists", async (SpotifyService svc) => await svc.GetPlaylistsAsync());
+
+        // Spotify Connect device list. Mostly diagnostic — when the widget
+        // sees Spotify playing in SMTC but /me/player returns nothing, this
+        // says whether the desktop is "known" to Spotify Connect or not.
+        group.MapGet("/devices", async (SpotifyService svc) => await svc.GetDevicesAsync());
+
+        // Force the local computer to be the active Spotify Connect device.
+        // The widget calls this when it detects the SMTC + /me/player split
+        // (audio playing, no API session). Body forwards a chosen deviceId,
+        // or we pick the first Computer-type device if none provided.
+        group.MapPost("/devices/activate", async (HttpRequest req, SpotifyService svc) =>
+        {
+            string? requestedId = null;
+            try
+            {
+                using var doc = await SysJson.JsonDocument.ParseAsync(req.Body);
+                if (doc.RootElement.ValueKind == SysJson.JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty("deviceId", out var idEl)
+                    && idEl.ValueKind == SysJson.JsonValueKind.String)
+                {
+                    requestedId = idEl.GetString();
+                }
+            }
+            catch { /* empty body is fine — fall through to autopick */ }
+
+            string? targetId = requestedId;
+            if (string.IsNullOrWhiteSpace(targetId))
+            {
+                var devices = await svc.GetDevicesAsync();
+                // Prefer an already-active device (no-op activation); else
+                // a non-restricted Computer-type; else first non-restricted.
+                targetId = devices.FirstOrDefault(d => d.IsActive)?.Id
+                        ?? devices.FirstOrDefault(d => d is { IsRestricted: false, Type: "Computer" })?.Id
+                        ?? devices.FirstOrDefault(d => !d.IsRestricted)?.Id;
+            }
+            if (string.IsNullOrWhiteSpace(targetId))
+                return Results.UnprocessableEntity(new { error = "No Spotify Connect device available to activate." });
+            var ok = await svc.TransferPlaybackAsync(targetId);
+            return ok ? Results.NoContent() : Results.UnprocessableEntity(new { error = "Spotify rejected the transfer." });
+        });
 
         group.MapGet("/playback", async (SpotifyService svc) => await svc.GetPlaybackAsync());
 

@@ -30,6 +30,11 @@ internal static class Resources
         return archive.GetEntry(entryName)?.Length ?? 0;
     }
 
+    public static bool HasEntry(string entryName)
+    {
+        return OpenArchive().GetEntry(entryName) != null;
+    }
+
     private static ZipArchive OpenArchive()
     {
         if (_archive != null) return _archive;

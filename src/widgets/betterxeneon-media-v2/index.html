@@ -52,19 +52,29 @@
        discrete stops because iCUE doesn't expose a dropdown control:
          0 = Lyrics       — keep the metadata + lyrics, hide bottom bar
          1 = Album cover  — center the album art, hide everything else
-         2 = Equalizer    — placeholder (in development, no audio capture yet) -->
+         2 = Equalizer    — real-time spectrum bars (WASAPI loopback) -->
   <meta name="x-icue-property" content="listeningView"
-        data-label="tr('Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer dev)')"
+        data-label="tr('Listening view mode (0=Lyrics, 1=Album cover, 2=Equalizer)')"
         data-type="slider"
         data-default="0"
         data-min="0"
         data-max="2"
         data-step="1">
 
+  <!-- Equalizer as background. When on, the blurred album-art layer is
+       swapped for a centered spectrum visualization behind the content.
+       Stacks on top of the host's WASAPI loopback FFT — so the bars are
+       always synced to whatever's actually playing on the system, not a
+       loop. -->
+  <meta name="x-icue-property" content="eqBackground"
+        data-label="tr('Use equalizer as background (instead of album art blur)')"
+        data-type="switch"
+        data-default="false">
+
   <script id="x-icue-groups" type="application/json">
     [
       { "title": "tr('Behavior')", "properties": ["pollIntervalMs", "showLyrics", "lyricSyncOffsetMs"] },
-      { "title": "tr('Listening View')", "properties": ["autoExpand", "autoExpandAfterSec", "listeningView"] }
+      { "title": "tr('Listening View')", "properties": ["autoExpand", "autoExpandAfterSec", "listeningView", "eqBackground"] }
     ]
   </script>
 
@@ -396,28 +406,32 @@
       opacity: 0.85;
     }
 
-    /* Playlists mode hides the bottom bar (progress / transport / status)
-       to make it visually obvious the user is in browse mode, not in
-       now-playing. They get back via the explicit back button in the
-       list header, the lib button is offscreen so there's no ambiguity
-       about what tapping it does. */
+    /* Playlists mode keeps the transport row visible so the lib button
+       (now showing a back arrow — see setLibMode) is reachable. Progress
+       bar + phase line still hide to keep the focus on the list. */
     .root.playlists-mode .progress,
-    .root.playlists-mode .transport,
-    .root.playlists-mode .phase { display: none; }
+    .root.playlists-mode .phase,
+    .root.playlists-mode .header-right { display: none; }
 
     /* -- Listening (screensaver) mode --------------------------------------
-       Three sub-modes, gated by the iCUE Listening view dropdown. All three
-       hide the bottom bar (progress/transport/status) and the up-next chip
-       + queue button on the right of the header — this is "ambient",
-       attention-respecting state. Tap anywhere to exit. */
-    .root.listening-mode .progress,
-    .root.listening-mode .transport,
-    .root.listening-mode .phase,
-    .root.listening-mode .header-right { display: none; }
+       Three sub-modes, gated by the iCUE Listening view dropdown. The
+       always-hide rules below cover album + equalizer; lyrics submode
+       intentionally keeps the bottom bar visible (user preference — they
+       still want playback controls reachable even when ambient lyrics are
+       up). Tap anywhere to exit listening mode entirely. */
 
-    /* Lyrics submode (default): everything still visible except the bottom
-       bar. Lyric track gets the rest of the room. No specific overrides
-       needed — the .listening-mode rule above is enough. */
+    /* Album submode: keep ONLY the centered cover. */
+    .root.listening-album .progress,
+    .root.listening-album .transport,
+    .root.listening-album .phase,
+    .root.listening-album .header-right { display: none; }
+    /* Equalizer submode: keep ONLY the placeholder. */
+    .root.listening-equalizer .progress,
+    .root.listening-equalizer .transport,
+    .root.listening-equalizer .phase,
+    .root.listening-equalizer .header-right { display: none; }
+
+    /* Lyrics submode: no bottom-bar hiding — controls stay reachable. */
 
     /* Album submode: hide all content, balloon the art to fill. Keep the
        blurred bg layer — it makes the centered cover feel poster-like. */
@@ -435,9 +449,10 @@
     /* When there's no art, the placeholder shouldn't squeeze the layout. */
     .root.listening-album .art.empty { visibility: visible; opacity: 0.2; }
 
-    /* Equalizer submode: placeholder for now (development). No audio capture
-       hook on this build, so render a glyph + "in development" line so the
-       option still produces a recognizable state. */
+    /* Equalizer submode: real-time spectrum bars via WASAPI loopback on
+       the host. The canvas is always in the DOM; CSS classes flip its
+       visibility based on listening-equalizer (full-screen) or
+       eq-background (dimmed backdrop). See .eq-canvas rules below. */
     .root.listening-equalizer .art,
     .root.listening-equalizer .art-bg,
     .root.listening-equalizer .content { display: none; }
@@ -445,27 +460,32 @@
       align-items: center;
       justify-content: center;
     }
-    .root.listening-equalizer::before {
-      content: '♪♫♪';
-      color: rgba(29, 185, 84, 0.6);
-      font-size: clamp(48px, 12vmin, 96px);
-      letter-spacing: 0.15em;
-      font-weight: 700;
-      text-align: center;
-      display: block;
-    }
-    .root.listening-equalizer::after {
-      content: 'Equalizer mode — in development';
+
+    /* EQ canvas — full-bleed, hidden by default. Two visible states:
+         .show-full  — listening-equalizer submode, vivid, in front
+         .show-bg    — eqBackground option on, dim, behind everything
+       Mutually exclusive; full takes precedence when both apply. */
+    .eq-canvas {
       position: absolute;
-      bottom: 14%;
-      left: 50%;
-      transform: translateX(-50%);
-      color: rgba(255, 255, 255, 0.35);
-      font-size: 12px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      font-weight: 600;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+      pointer-events: none;
     }
+    .eq-canvas.show-full {
+      display: block;
+      z-index: 5;
+      opacity: 1;
+    }
+    .eq-canvas.show-bg {
+      display: block;
+      z-index: -1;     /* same plane as .art-bg */
+      opacity: 0.4;    /* subordinate to content readability */
+    }
+    /* When EQ is the background, hide the album-art bg so they don't fight
+       for the same pixels. */
+    .root.eq-as-bg .art-bg { display: none; }
 
     /* Lyrics — fixed-position viewport, inner track translates via transform.
        (See phase 6.1 commit message for the full rationale on why this
@@ -591,9 +611,16 @@
       color: #08130c;
     }
     /* Connect/Playlists slot — Spotify-green tinted to match the source
-       chip color, but a subtler treatment than the play button. */
+       chip color, but a subtler treatment than the play button. When the
+       button is "active" (we're already in the playlists view, so the
+       icon is a back arrow), invert to a filled green pill — same
+       language as the queue button's active state. */
     .t-btn.lib {
       color: #1db954;
+    }
+    .t-btn.lib.active {
+      background: #1db954;
+      color: #08130c;
     }
 
     .phase {
@@ -621,6 +648,11 @@
 <body>
   <main class="root size-vertical" id="root">
     <img class="art-bg" id="artBg" alt="" aria-hidden="true">
+    <!-- Spectrum visualizer. SSE stream from /api/audio/spectrum/stream
+         feeds the bar values; requestAnimationFrame redraws at ~60Hz.
+         Hidden by default — only painted when listeningView=Equalizer is
+         active in listening mode, or the eqBackground option is on. -->
+    <canvas class="eq-canvas" id="eqCanvas" aria-hidden="true"></canvas>
     <img class="art empty" id="art" alt="">
     <div class="content">
       <div class="header-row">
@@ -797,10 +829,16 @@
     // pointer / key event. listeningView selects the submode:
     //   0 = Lyrics      (keep lyrics + metadata, hide bottom bar)
     //   1 = Album       (center the cover, hide everything else)
-    //   2 = Equalizer   (placeholder, in development)
+    //   2 = Equalizer   (full-screen real-time bars)
     let listeningMode = false;
     let lastActivityAt = performance.now();
     let optListeningView = 0;
+
+    // Equalizer-as-background option. Independent of listening mode —
+    // when on, the .art-bg blurred-cover layer is swapped for the EQ
+    // canvas behind the content. Stacks with listening-equalizer if both
+    // are active (the full-screen overlay takes precedence visually).
+    let optEqBackground = false;
     // Aspect-ratio threshold separating wide-strip from square/tall.
     // Edge cell aspect ratios from the kit:
     //   Small horizontal:  840×344 = 2.44 → wide
@@ -909,6 +947,9 @@
       for (const entry of entries) {
         applyLayout(entry.contentRect.width, entry.contentRect.height);
       }
+      // Keep the EQ canvas backing-store in sync with the visible size.
+      // No-op when the canvas is hidden (eqResize is cheap either way).
+      eqResize();
     }).observe(rootEl);
     applyLayout(rootEl.clientWidth, rootEl.clientHeight);
 
@@ -966,9 +1007,10 @@
       }
     }
 
-    // Library/Connect slot. Authed → Playlists icon (opens library — wired
-    // up later), unauthed → Spotify wordmark (initiates OAuth). Same button
-    // element so layout doesn't shift on the auth flip.
+    // Library / Connect / Back slot — same button element, three icon
+    // states. Auth determines whether it's connect or playlists; if we're
+    // already IN the playlists view, the icon becomes a back arrow so the
+    // same physical button is the way out. No layout shift between modes.
     const PLAYLISTS_SVG =
       '<line x1="8" y1="6" x2="21" y2="6"/>' +
       '<line x1="8" y1="12" x2="21" y2="12"/>' +
@@ -976,15 +1018,28 @@
       '<line x1="3" y1="6" x2="3.01" y2="6"/>' +
       '<line x1="3" y1="12" x2="3.01" y2="12"/>' +
       '<line x1="3" y1="18" x2="3.01" y2="18"/>';
+    const BACK_SVG =
+      '<path d="M19 12H5"/>' +
+      '<path d="M12 19l-7-7 7-7"/>';
     const CONNECT_SVG =
       '<circle cx="12" cy="12" r="10"/>' +
       '<path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>';
     function setLibMode() {
-      const authed = spotifyAuthed;
-      const mode = authed ? 'playlists' : 'connect';
+      let mode;
+      if (!spotifyAuthed) mode = 'connect';
+      else if (currentView === 'playlists') mode = 'back';
+      else mode = 'playlists';
       if (mode === lastLibMode) return;
       lastLibMode = mode;
-      if (authed) {
+      if (mode === 'back') {
+        libIcon.innerHTML = BACK_SVG;
+        libIcon.setAttribute('fill', 'none');
+        libIcon.setAttribute('stroke', 'currentColor');
+        libIcon.setAttribute('stroke-width', '2.4');
+        libIcon.setAttribute('stroke-linecap', 'round');
+        libIcon.setAttribute('stroke-linejoin', 'round');
+        libBtn.setAttribute('aria-label', 'Back to now playing');
+      } else if (mode === 'playlists') {
         libIcon.innerHTML = PLAYLISTS_SVG;
         libIcon.setAttribute('fill', 'none');
         libIcon.setAttribute('stroke', 'currentColor');
@@ -1071,6 +1126,11 @@
           setUpnext('');
         }
         if (listVisible()) applyView();
+        // Prefetch lyrics for the next few queued tracks so by the time
+        // they actually play, the response is a memory-cache hit and the
+        // lyric track snaps in instantly rather than waiting for an LRClib
+        // round-trip (which can take 100ms-4s in our logs).
+        prefetchLyricsForQueue();
       } catch { /* non-fatal */ }
     }
 
@@ -1102,7 +1162,10 @@
     // see a stale list — the periodic pollers keep it fresh after that.
 
     async function playPlaylist(id) {
-      try { await fetch(HOST + '/api/spotify/playlists/' + encodeURIComponent(id) + '/play', { method: 'POST' }); }
+      // Host route is /api/spotify/play/playlist/{id} (mirrors /play/track/{id}).
+      // The widget previously posted to /playlists/{id}/play which 404'd
+      // silently — taps did nothing.
+      try { await fetch(HOST + '/api/spotify/play/playlist/' + encodeURIComponent(id), { method: 'POST' }); }
       catch { /* surfaced by next poll's status */ }
     }
 
@@ -1131,6 +1194,174 @@
       applyView();
     }
 
+    // --- Equalizer (WASAPI loopback spectrum) ---------------------------
+    // The host runs a continuous WASAPI loopback capture, FFTs the buffer
+    // into 64 log-spaced bins, and pushes a snapshot at ~30Hz over SSE.
+    // We draw on requestAnimationFrame at the display refresh rate so the
+    // bars feel native even when SSE delivery jitters. EventSource handles
+    // reconnect automatically; we open/close it based on whether anything
+    // visually needs the spectrum (listening-equalizer or eqBackground).
+
+    const eqCanvas = document.getElementById('eqCanvas');
+    const eqCtx = eqCanvas.getContext('2d', { alpha: true });
+    const EQ_BINS = 64;
+    let eqSpectrum = new Float32Array(EQ_BINS);
+    const eqPeaks = new Float32Array(EQ_BINS);
+    let eqStream = null;
+    let eqRAF = 0;
+    let eqDpr = 1;
+
+    function eqResize() {
+      const rect = eqCanvas.getBoundingClientRect();
+      eqDpr = window.devicePixelRatio || 1;
+      const w = Math.max(1, Math.round(rect.width * eqDpr));
+      const h = Math.max(1, Math.round(rect.height * eqDpr));
+      if (eqCanvas.width !== w) eqCanvas.width = w;
+      if (eqCanvas.height !== h) eqCanvas.height = h;
+      eqCtx.setTransform(eqDpr, 0, 0, eqDpr, 0, 0);
+    }
+
+    function eqWanted() {
+      return (listeningMode && optListeningView === 2) || optEqBackground;
+    }
+
+    function applyEqVisibility() {
+      const wantsFull = listeningMode && optListeningView === 2;
+      const wantsBg = optEqBackground && !wantsFull;
+      eqCanvas.classList.toggle('show-full', wantsFull);
+      eqCanvas.classList.toggle('show-bg', wantsBg);
+      rootEl.classList.toggle('eq-as-bg', wantsBg);
+      if (wantsFull || wantsBg) {
+        eqResize();
+        ensureEqStream();
+        ensureEqRAF();
+      } else {
+        stopEqRAF();
+        stopEqStream();
+        // Clear the canvas so a stale frame doesn't flash if it becomes
+        // visible again before the next paint.
+        const rect = eqCanvas.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          eqCtx.clearRect(0, 0, rect.width, rect.height);
+        }
+      }
+    }
+
+    function ensureEqStream() {
+      if (eqStream) return;
+      try {
+        eqStream = new EventSource(HOST + '/api/audio/spectrum/stream');
+      } catch {
+        eqStream = null;
+        return;
+      }
+      eqStream.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (Array.isArray(data.bins)) {
+            const n = Math.min(EQ_BINS, data.bins.length);
+            for (let i = 0; i < n; i++) eqSpectrum[i] = data.bins[i];
+          }
+        } catch { /* drop bad frame */ }
+      };
+      // EventSource auto-reconnects on transient drops; nothing to do
+      // on error besides logging if needed.
+    }
+
+    function stopEqStream() {
+      if (eqStream) {
+        try { eqStream.close(); } catch { /* ignore */ }
+        eqStream = null;
+      }
+      // Decay the bars to zero so they don't freeze mid-pulse on close.
+      for (let i = 0; i < EQ_BINS; i++) {
+        eqSpectrum[i] = 0;
+        eqPeaks[i] = 0;
+      }
+    }
+
+    function ensureEqRAF() {
+      if (eqRAF) return;
+      const tick = () => {
+        if (!eqWanted()) { eqRAF = 0; return; }
+        drawEqBars();
+        eqRAF = requestAnimationFrame(tick);
+      };
+      eqRAF = requestAnimationFrame(tick);
+    }
+    function stopEqRAF() {
+      if (eqRAF) {
+        cancelAnimationFrame(eqRAF);
+        eqRAF = 0;
+      }
+    }
+
+    // Spotify-green spectrum bars — vertical gradient, fading mirror below
+    // the baseline, decaying peak caps. Same visual language as the
+    // prototype's drawBars, retuned for our color theme. Centered baseline
+    // when used as a backdrop, bottom-anchored when full-screen — the
+    // baseline ratio is the only mode-specific parameter.
+    function drawEqBars() {
+      const rect = eqCanvas.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+      if (w <= 0 || h <= 0) return;
+      // Cheap DPR drift check — devicePixelRatio can change if the user
+      // moves the widget to a different display.
+      if ((window.devicePixelRatio || 1) !== eqDpr) eqResize();
+
+      // Soft trail — semi-transparent black wipe so bars leave a faint
+      // motion blur. Lower alpha = longer trails.
+      eqCtx.fillStyle = 'rgba(10, 10, 12, 0.35)';
+      eqCtx.fillRect(0, 0, w, h);
+
+      // In bg mode keep the visualization centered vertically (less
+      // competition with overlaid text); in full mode use the prototype's
+      // 0.82 baseline so the bars feel grounded.
+      const isFull = eqCanvas.classList.contains('show-full');
+      const baseY = isFull ? h * 0.82 : h * 0.62;
+      const maxH = isFull ? h * 0.62 : h * 0.48;
+
+      const pad = w * 0.04;
+      const innerW = w - pad * 2;
+      const slot = innerW / EQ_BINS;
+      const barW = slot * 0.7;
+
+      for (let i = 0; i < EQ_BINS; i++) {
+        const v = eqSpectrum[i];
+        const bh = Math.min(maxH, v * maxH);
+        eqPeaks[i] = Math.max(eqPeaks[i] - 0.6, bh);
+        const x = pad + i * slot + (slot - barW) / 2;
+
+        // Main bar gradient: bright at top, transparent at base.
+        const grad = eqCtx.createLinearGradient(0, baseY - bh, 0, baseY);
+        grad.addColorStop(0, 'rgba(29, 185, 84, 1)');
+        grad.addColorStop(1, 'rgba(29, 185, 84, 0.25)');
+        eqCtx.fillStyle = grad;
+        eqCtx.fillRect(x, baseY - bh, barW, bh);
+
+        // Mirror below baseline at 18% alpha — implies stereo/wave depth
+        // without forcing two channels of data.
+        eqCtx.globalAlpha = 0.18;
+        const mirrorH = bh * 0.55;
+        const g2 = eqCtx.createLinearGradient(0, baseY, 0, baseY + mirrorH);
+        g2.addColorStop(0, 'rgba(29, 185, 84, 0.6)');
+        g2.addColorStop(1, 'rgba(29, 185, 84, 0)');
+        eqCtx.fillStyle = g2;
+        eqCtx.fillRect(x, baseY, barW, mirrorH);
+        eqCtx.globalAlpha = 1;
+
+        // Peak cap — 2px line that slowly falls toward the bar top.
+        eqCtx.fillStyle = 'rgba(29, 185, 84, 0.95)';
+        eqCtx.fillRect(x, baseY - eqPeaks[i] - 3, barW, 2);
+      }
+    }
+
+    // Re-resize the canvas + redraw whenever the root cell does.
+    // ResizeObserver on rootEl already fires applyLayout; canvas tracks
+    // the root naturally because it's positioned `inset: 0`. We piggyback
+    // on the existing observer further down for DPR/dimension sync.
+
     // --- Listening (screensaver) mode -----------------------------------
 
     function applyListeningMode() {
@@ -1144,6 +1375,10 @@
         listeningMode && optListeningView === 1);
       rootEl.classList.toggle('listening-equalizer',
         listeningMode && optListeningView === 2);
+      // Equalizer visibility depends on the same flags — recompute every
+      // time the listening state changes so the canvas comes in / drops
+      // out as a unit.
+      applyEqVisibility();
     }
 
     function enterListeningMode() {
@@ -1182,6 +1417,12 @@
       // were explicitly looking at something; an ambient takeover here
       // feels rude.
       if (currentView === 'playlists') return;
+      // Lyrics submode no longer hides anything — the bottom bar stays
+      // visible even when ambient (user preference: controls always
+      // reachable). So entering listening mode in lyrics submode is a
+      // no-op visually, but we still flip the class for future hooks.
+      // Album + equalizer submodes are the real "hide everything else"
+      // states.
       const idleSec = (performance.now() - lastActivityAt) / 1000;
       if (idleSec >= optAutoExpandAfterSec) enterListeningMode();
     }, 1000);
@@ -1218,6 +1459,9 @@
       // light the toggle up.
       queueBtn.classList.toggle('active', currentView === 'queue');
       libBtn.classList.toggle('active', currentView === 'playlists');
+      // Lib button icon depends on currentView (back arrow in playlists
+      // view) — re-resolve every time the view changes.
+      setLibMode();
 
       if (!showList) return;
       if (currentView === 'playlists') {
@@ -1229,11 +1473,33 @@
 
     function renderQueueList() {
       const frag = document.createDocumentFragment();
+
+      // Header. Matches the playlists list visually — small title that
+      // anchors what the user is looking at without competing for height.
+      const header = document.createElement('div');
+      header.className = 'list-header';
+      const title = document.createElement('div');
+      title.className = 'lh-title';
+      title.textContent = spotifyQueue.length > 0
+        ? 'Up next · ' + spotifyQueue.length
+        : 'Up next';
+      header.appendChild(title);
+      frag.appendChild(header);
+
       if (spotifyQueue.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'list-empty';
+        // Spotify's queue API can return empty for two distinct reasons:
+        //   - User genuinely has no queued tracks
+        //   - Spotify Connect hasn't activated the device yet (SMTC sees
+        //     audio, but Spotify cloud's "active device" slot is empty —
+        //     happens on fresh authorize, or when the desktop client
+        //     wasn't recently interacted with).
+        // We can't reliably tell the two apart from this side, so hint
+        // at both with a single message that nudges the user to interact
+        // with Spotify if needed.
         empty.textContent = spotifyAuthed
-          ? 'Queue is empty'
+          ? 'Queue is empty. Play something in Spotify — or tap play/pause in the desktop client if it’s already going.'
           : 'Connect Spotify to see the queue';
         frag.appendChild(empty);
       } else {
@@ -1266,21 +1532,15 @@
     function renderPlaylistsList() {
       const frag = document.createDocumentFragment();
 
-      // Header: back button + title. Anchors the user — without the
-      // bottom transport visible there'd be no return affordance.
+      // Header: just a title now. The way back is the lib button in the
+      // bottom-right transport (whose icon swaps to a back arrow while
+      // currentView === 'playlists'). Tapping a playlist also auto-snaps
+      // back to lyrics, so the header doesn't need its own back chip.
       const header = document.createElement('div');
       header.className = 'list-header';
-      const back = document.createElement('button');
-      back.className = 'list-back';
-      back.type = 'button';
-      back.innerHTML =
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-        '<path d="M15 18l-6-6 6-6"/></svg><span>Back</span>';
-      back.addEventListener('click', () => setView('lyrics'));
       const title = document.createElement('div');
       title.className = 'lh-title';
       title.textContent = 'Your playlists';
-      header.appendChild(back);
       header.appendChild(title);
       frag.appendChild(header);
 
@@ -1292,7 +1552,13 @@
           : 'Connect Spotify to see your playlists';
         frag.appendChild(empty);
       } else {
-        for (const pl of spotifyPlaylists) {
+        // Alphabetize. Sort a copy so we don't mutate the stored array
+        // (the poller compares state by reference in some places).
+        // localeCompare with sensitivity:base + numeric so "Album 2"
+        // sorts before "Album 10" and casing doesn't split the list.
+        const sorted = spotifyPlaylists.slice().sort((a, b) =>
+          (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base', numeric: true }));
+        for (const pl of sorted) {
           const row = document.createElement('button');
           row.className = 'list-row';
           row.type = 'button';
@@ -1473,6 +1739,63 @@
       applyView();
     }
 
+    // Memory cache of LRClib responses keyed by `artist|title`. Stores the
+    // raw response object {found, syncedLyrics, ...} — the parseLrc +
+    // marker insertion happens at render time because it depends on
+    // durationMs which is per-track. ~50 entries cap so a really long
+    // session doesn't grow unbounded; LRU eviction by insertion order.
+    const lyricsCache = new Map();
+    const LYRICS_CACHE_MAX = 50;
+    function lyricsCacheKey(artist, title) {
+      return (artist || '') + '|' + (title || '');
+    }
+    function lyricsCachePut(key, value) {
+      if (lyricsCache.has(key)) lyricsCache.delete(key);  // re-insert for LRU
+      lyricsCache.set(key, value);
+      while (lyricsCache.size > LYRICS_CACHE_MAX) {
+        const oldest = lyricsCache.keys().next().value;
+        lyricsCache.delete(oldest);
+      }
+    }
+
+    async function loadLyricsResponse(artist, title, album) {
+      // Returns the host's /api/lyrics response object (or null on error).
+      // Hits memory cache first — only the FIRST request per track pays
+      // the network round-trip; prefetch from the queue means by the time
+      // a track actually plays, this should already be a cache hit.
+      const key = lyricsCacheKey(artist, title);
+      if (lyricsCache.has(key)) return lyricsCache.get(key);
+      try {
+        const url = HOST + '/api/lyrics?artist=' + encodeURIComponent(artist) +
+          '&title=' + encodeURIComponent(title) +
+          (album ? '&album=' + encodeURIComponent(album) : '');
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const data = await res.json();
+        lyricsCachePut(key, data);
+        return data;
+      } catch {
+        return null;
+      }
+    }
+
+    function prefetchLyricsForQueue() {
+      // Fire-and-forget prefetch of the next few queue tracks. Album is
+      // omitted because the queue items don't carry it — LRClib's match
+      // is fine without it for most cases (artist + title is the primary
+      // key); the active-track fetch on track-change still passes album.
+      if (!optShowLyrics) return;
+      const upcoming = spotifyQueue.slice(0, 5);
+      for (const t of upcoming) {
+        if (!t.artist || !t.title) continue;
+        const key = lyricsCacheKey(t.artist, t.title);
+        if (lyricsCache.has(key)) continue;
+        // Don't await — we want concurrent fan-out, and we don't care
+        // about the result here. The cache fill is the side effect.
+        void loadLyricsResponse(t.artist, t.title, '');
+      }
+    }
+
     async function fetchLyricsFor(artist, title, album) {
       const key = artist + '|' + title;
       if (key === lyricsFetchKey) return;
@@ -1484,22 +1807,13 @@
       // track and re-calls fetchLyricsFor). When lyrics are off, the
       // queue auto-fallback in applyView takes over.
       if (!optShowLyrics) { applyView(); return; }
-      try {
-        const url = HOST + '/api/lyrics?artist=' + encodeURIComponent(artist) +
-          '&title=' + encodeURIComponent(title) +
-          (album ? '&album=' + encodeURIComponent(album) : '');
-        const res = await fetch(url);
-        if (!res.ok) { applyView(); return; }
-        const data = await res.json();
-        if (key !== lyricsFetchKey) return;
-        if (data.found && data.syncedLyrics) {
-          const raw = parseLrc(data.syncedLyrics);
-          parsedLyrics = addInstrumentalMarkers(raw, durationMs);
-          renderLyrics(parsedLyrics);
-        } else {
-          applyView();
-        }
-      } catch {
+      const data = await loadLyricsResponse(artist, title, album);
+      if (key !== lyricsFetchKey) return;        // user changed track mid-fetch
+      if (data && data.found && data.syncedLyrics) {
+        const raw = parseLrc(data.syncedLyrics);
+        parsedLyrics = addInstrumentalMarkers(raw, durationMs);
+        renderLyrics(parsedLyrics);
+      } else {
         applyView();
       }
     }
@@ -1610,12 +1924,18 @@
         lastCanNext = setBtnEnabled(nextBtn, !!np.canGoNext, lastCanNext);
 
         // Position anchor. Use serverPos as-is and anchor it at fetchEnd
-        // (the moment we received the response). The small natural transit
-        // lag puts the highlighter a hair behind the audio, which is what
-        // most users perceive as "in sync" — the green line matches what
-        // they're hearing, not what's about to be sung. The iCUE Behavior
-        // > Lyric sync offset slider is the user-tunable knob for the rest.
-        const serverPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
+        // (the moment we received the response).
+        // Then apply a small constant slowdown — SMTC + Windows audio
+        // pipeline + speaker buffer typically adds ~30ms of latency between
+        // "where the file pointer is" and "what the listener hears". Without
+        // compensation the highlighter feels a hair too eager. Sign matters:
+        // this SUBTRACTS from the position so lyric lines hit later, which
+        // is the opposite direction from the old halfRoundTrip patch (that
+        // one added to the position and made lyrics earlier — wrong fix).
+        // The iCUE Lyric sync offset slider stacks on top for per-song tuning.
+        const PERCEPTUAL_LAG_MS = 30;
+        const rawPos = typeof np.positionMs === 'number' ? np.positionMs : 0;
+        const serverPos = rawPos - PERCEPTUAL_LAG_MS;
         durationMs = typeof np.durationMs === 'number' ? np.durationMs : 0;
         const trackKey = (np.title || '') + '|' + (np.artist || '');
         const now = fetchEnd;
@@ -1721,6 +2041,14 @@
       // Re-apply if we're currently in listening mode so the user sees the
       // submode change immediately without having to wait for idle to flip.
       if (listeningMode) applyListeningMode();
+      // EQ visibility tracks listeningView even outside listening mode (so
+      // toggling the option mid-session still produces the right canvas
+      // state — most notably, dropping the EQ stream when leaving submode 2).
+      applyEqVisibility();
+    });
+    registerIcueOption('eqBackground', false, value => {
+      optEqBackground = value === true || value === 'true';
+      applyEqVisibility();
     });
 
     pollOnce();
