@@ -18,10 +18,16 @@ namespace BetterXeneonWidget.Host.Audio;
 /// </summary>
 public sealed class AudioSpectrumService : IDisposable
 {
-    private const int FFT_SIZE = 1024;
-    private const int FFT_LOG = 10;
+    // FFT_SIZE = 2048 → 23.4Hz resolution at 48kHz. The previous 1024
+    // produced 47Hz per FFT bin which left most sub-130Hz log-bands empty
+    // (the lowest ~15 output bins had no FFT bin falling inside their
+    // narrow ranges). 2048 puts at least one FFT bin in every output
+    // band down to ~50Hz, so the bass bars actually move. Cost: ~43ms
+    // capture-to-spectrum latency (was 21ms) — fine for visualization.
+    private const int FFT_SIZE = 2048;
+    private const int FFT_LOG = 11;
     private const int NUM_BINS = 64;
-    private const float FREQ_LOW = 30f;       // lowest bin lower edge (Hz)
+    private const float FREQ_LOW = 25f;       // lowest bin lower edge (Hz)
     private const float FREQ_HIGH = 16000f;   // highest bin upper edge (Hz)
 
     private readonly ILogger<AudioSpectrumService> _log;
@@ -35,6 +41,10 @@ public sealed class AudioSpectrumService : IDisposable
     private readonly float[] _raw = new float[NUM_BINS];
     private readonly float[] _smoothed = new float[NUM_BINS];
     private float _bass, _mid, _treble;
+    // Auto-gain running peak — decays slowly, latches up to the loudest
+    // recent raw band value. Effective gain = TARGET / _runningPeak so
+    // the visual scale tracks the song's dynamic range automatically.
+    private float _runningPeak = 0.01f;
     private DateTimeOffset _lastUpdate = DateTimeOffset.MinValue;
     private bool _captureFailed;
 
@@ -186,19 +196,66 @@ public sealed class AudioSpectrumService : IDisposable
             if (counts[j] > 0) _raw[j] /= counts[j];
         }
 
-        // Normalize. FFT magnitudes for windowed real input scale roughly with
-        // input amplitude; we map to a 0..1 visual range with a soft knee so
-        // quiet music still moves the bars. The 18× factor is empirically
-        // tuned against typical music — adjust if everything looks too low
-        // or pinned to the top.
-        const float GAIN = 18f;
+        // Fill empty bands with their nearest left neighbor (then nearest
+        // right). Even after the FFT_SIZE bump there can be holes at the
+        // very low end depending on sample rate (44.1kHz audio gives a
+        // 21.5Hz/bin resolution — fine for 25Hz+ but the bottom 1-2 bands
+        // can still be empty depending on where the FFT bins land). Holes
+        // look weird as a dead-flat bar next to active ones; copying from
+        // the neighbor produces a more continuous spectrum.
+        for (int j = 1; j < NUM_BINS; j++)
+        {
+            if (counts[j] == 0) _raw[j] = _raw[j - 1] * 0.7f;
+        }
+        for (int j = NUM_BINS - 2; j >= 0; j--)
+        {
+            if (counts[j] == 0 && _raw[j] == 0) _raw[j] = _raw[j + 1] * 0.7f;
+        }
+
+        // Normalize. FFT magnitudes for windowed real input scale with
+        // input amplitude; we map to a 0..1 visual range. Auto-gain
+        // (running peak normalization) makes the bars hit ~85-95% of
+        // canvas height regardless of source level — quiet recordings
+        // still look full, loud ones use the headroom.
+        //
+        // TARGET 1.2: where we want the loudest band to land. CEILING 1.4
+        // leaves a bit of overshoot room for transients without clipping.
+        // PEAK_DECAY 0.99: ~3s half-life at ~23 FFTs/sec — fast enough to
+        // adapt between songs / dynamic passages, slow enough not to
+        // pump on every individual kick.
         const float CEILING = 1.4f;
+        const float MIN_PEAK = 0.003f;     // floor so auto-gain doesn't divide by ~0
+        const float TARGET = 1.2f;         // where we want recent peaks to land
+        const float PEAK_DECAY = 0.99f;
+
+        // Track the loudest current-frame raw value and let it decay so
+        // the visual normalization adapts to the song's current dynamic
+        // range. Without this, classical music with a wide dynamic range
+        // would either be invisible in quiet passages or clipped in loud
+        // ones.
+        float framePeak = 0f;
+        for (int j = 0; j < NUM_BINS; j++) if (_raw[j] > framePeak) framePeak = _raw[j];
+        _runningPeak = MathF.Max(_runningPeak * PEAK_DECAY, framePeak);
+        _runningPeak = MathF.Max(_runningPeak, MIN_PEAK);
+        float effectiveGain = TARGET / _runningPeak;
+
+        // Perceptual gamma — the human eye reads bar heights linearly, but
+        // audio "loudness" is closer to logarithmic, so a target of 0.3
+        // (a normal-volume note) looks much quieter than it sounds. Gamma
+        // 0.65 stretches the bottom half of the range upward: 0.3 → 0.45,
+        // 0.5 → 0.62, 1.0 → 1.0. Top end is untouched so we don't lose
+        // dynamic range at the loud side.
+        const float GAMMA = 0.65f;
 
         lock (_stateLock)
         {
             for (int j = 0; j < NUM_BINS; j++)
             {
-                float target = MathF.Min(CEILING, _raw[j] * GAIN);
+                float linear = MathF.Min(CEILING, _raw[j] * effectiveGain);
+                // Gamma curve. Only applied above ~3% of full scale so
+                // genuine silence stays at 0 (gamma would otherwise lift
+                // floor noise off the baseline).
+                float target = linear < 0.03f ? linear : MathF.Pow(linear / CEILING, GAMMA) * CEILING;
                 // Asymmetric smoothing — fast attack, slow release. Matches
                 // the perceptual feel of a stereo EQ display.
                 float a = target > _smoothed[j] ? 0.55f : 0.18f;
