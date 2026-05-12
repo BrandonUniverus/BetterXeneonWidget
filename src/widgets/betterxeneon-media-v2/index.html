@@ -294,29 +294,42 @@
       color: var(--theme-accent);
       margin-right: 6px;
     }
+    /* Top-right control buttons (queue + settings). Sized + styled to
+       match the bottom .t-btn transport row (same height clamp, same
+       dark surface, same white icon, same hover treatment) — just
+       constrained to width = height so they stay circles (border-radius
+       50%). No left/right padding; the icon centers automatically via
+       flex. Active state still tints to theme-accent like the play
+       button does, so the user can see which sub-view they're in. */
     .queue-btn {
       flex: 0 0 auto;
-      width: 38px;
-      height: 38px;
+      height: clamp(44px, 7.5vmin, 60px);
+      width: clamp(44px, 7.5vmin, 60px);
       border-radius: 50%;
       border: none;
-      background: rgba(0, 0, 0, 0.55);   /* dark backdrop so the button reads against EQ / album bg */
-      color: var(--theme-accent);  /* tint the glyph with accent — clearer affordance */
+      background: #1c1c22;
+      color: #fff;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
       padding: 0;
       touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
       transition: background 80ms, color 80ms;
     }
-    .queue-btn:hover, .queue-btn:active { background: rgba(var(--theme-accent-rgb), 0.2); }
+    .queue-btn:hover, .queue-btn:active { background: #2a2a32; }
     .queue-btn.active {
       background: var(--theme-accent);
-      color: var(--theme-accent-fg);   /* invert when active — same treatment as play button */
+      color: var(--theme-accent-fg);
     }
     .queue-btn.hidden { display: none; }
-    .queue-btn svg { width: 60%; height: 60%; pointer-events: none; }
+    .queue-btn svg {
+      width: 40%;
+      max-width: 24px;
+      max-height: 24px;
+      pointer-events: none;
+    }
 
     /* List view (queue or playlists) — fills the same slot the lyrics
        container does in the content column. Flex column so children
