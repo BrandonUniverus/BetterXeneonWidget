@@ -18,10 +18,18 @@ public static class MediaEndpoints
             await svc.TogglePlayPauseAsync() ? Results.NoContent() : Results.UnprocessableEntity());
 
         group.MapPost("/next", async (MediaService svc) =>
-            await svc.NextAsync() ? Results.NoContent() : Results.UnprocessableEntity());
+        {
+            var ok = await svc.NextAsync();
+            if (ok) svc.InvalidateArtCache();
+            return ok ? Results.NoContent() : Results.UnprocessableEntity();
+        });
 
         group.MapPost("/previous", async (MediaService svc) =>
-            await svc.PreviousAsync() ? Results.NoContent() : Results.UnprocessableEntity());
+        {
+            var ok = await svc.PreviousAsync();
+            if (ok) svc.InvalidateArtCache();
+            return ok ? Results.NoContent() : Results.UnprocessableEntity();
+        });
 
         // Album art — bytes change with the track. Clients use ?v=<artVersion>
         // to bust the browser cache without re-fetching now-playing twice.
