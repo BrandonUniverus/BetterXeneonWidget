@@ -42,6 +42,66 @@
     [{ "title": "tr('Widget Personalization')", "properties": ["backgroundColor", "transparency"] }]
   </script>
 
+  <!-- ====================================================================
+       Crash-visibility overlay. Installed BEFORE the main module so that
+       a syntax error / TDZ ReferenceError / unhandled rejection during
+       initialization (the kind that previously left the widget stuck at
+       "Connecting…" forever with no on-screen hint) renders a readable
+       error pane on top of whatever's already in the DOM.
+
+       Deliberately plain-old-script (not module) so its handlers register
+       synchronously during head parsing — by the time any module script
+       below starts evaluating, this is already listening. Self-contained:
+       no external CSS, no helper functions, no dependencies that could
+       themselves crash.
+       ==================================================================== -->
+  <script>
+    (function () {
+      function showError(message, source, lineno, error) {
+        try {
+          var overlay = document.getElementById('__bxw_error_overlay');
+          if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = '__bxw_error_overlay';
+            // Inline styles — the widget's own stylesheet may not have
+            // loaded yet, and even if it has, the error pane needs to be
+            // visually independent so a CSS-related crash still surfaces.
+            overlay.style.cssText =
+              'position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
+              'background:rgba(90,0,16,0.94);color:#fff;' +
+              'font:12px/1.45 ui-monospace,Consolas,monospace;' +
+              'padding:10px 14px;max-height:60vh;overflow-y:auto;' +
+              'white-space:pre-wrap;word-break:break-word;' +
+              'box-shadow:0 4px 14px rgba(0,0,0,0.5);';
+            (document.body || document.documentElement).appendChild(overlay);
+          }
+          var stack = error && error.stack ? '\n' + error.stack : '';
+          var where = source ? ' (' + String(source).split(/[\/\\]/).pop() + ':' + lineno + ')' : '';
+          // Prepend rather than overwrite — multiple errors stack up for
+          // debugging. Keep the first 4 to avoid runaway DOM growth if
+          // something errors in a tight loop.
+          var entry = document.createElement('div');
+          entry.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.15);padding:4px 0;';
+          entry.textContent = 'Widget error: ' + message + where + stack;
+          overlay.insertBefore(entry, overlay.firstChild);
+          while (overlay.childElementCount > 4) overlay.removeChild(overlay.lastChild);
+        } catch (e) {
+          // If the overlay itself fails (no DOM, CSP, etc.), there's
+          // nothing useful to do here except keep the console line.
+          try { console.error('error overlay failed:', e); } catch (_) {}
+        }
+      }
+      window.addEventListener('error', function (e) {
+        showError(e.message || String(e.error || 'unknown'), e.filename, e.lineno, e.error);
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e.reason;
+        var msg = 'Unhandled promise rejection: ' + (r && r.message ? r.message : String(r));
+        showError(msg, '', 0, r);
+      });
+    })();
+  </script>
+
   <style>
     /* ---- Theme system ----------------------------------------------------
        One iCUE option ("Theme") drives EVERY accent color across the
