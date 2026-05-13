@@ -779,8 +779,8 @@
     .eq-visualizer.show-bg.eq-mode-bars,
     .eq-visualizer.show-full.eq-mode-bars {
       background: linear-gradient(to bottom,
-        #000 0,
-        #000 var(--eq-reflection-y),
+        var(--bg-color, #000000) 0,
+        var(--bg-color, #000000) var(--eq-reflection-y),
         #0a0a0c var(--eq-reflection-y),
         #0a0a0c 100%);
     }
@@ -1046,6 +1046,7 @@
     .t-btn:hover { background: #2a2a32; }
     .t-btn:active { background: #2a2a32; }
     .t-btn:disabled { opacity: 0.3; cursor: default; }
+    .t-btn.hidden { display: none; }
     .t-btn svg {
       width: 30%;
       max-width: 24px;
@@ -1125,7 +1126,7 @@
         </div>
         <div class="header-right">
           <div class="upnext-chip empty" id="upnext"><span class="label">Up next</span><span id="upnextText"></span></div>
-          <button class="queue-btn" id="queueBtn" type="button" aria-label="Show queue" title="Show queue">
+          <button class="queue-btn hidden" id="queueBtn" type="button" aria-label="Show queue" title="Show queue">
             <!-- Spotify-style queue glyph: three horizontal bars (top two
                  full width, bottom shorter) + a play triangle to the right
                  of the bottom bar. Reads instantly as "what's next in
@@ -1179,7 +1180,7 @@
         <!-- Slot 4: Playlists when authed, Connect when not. Same shape so
              the layout doesn't shift when auth flips. id stays stable;
              we swap the inner SVG + aria-label + click handler. -->
-        <button class="t-btn lib" id="libBtn" type="button" aria-label="Connect Spotify">
+        <button class="t-btn lib hidden" id="libBtn" type="button" aria-label="Connect Spotify">
           <svg viewBox="0 0 24 24" aria-hidden="true" id="libIcon">
             <!-- Default = Spotify wordmark icon (Connect) -->
             <circle cx="12" cy="12" r="10"/>
@@ -1308,13 +1309,25 @@
     }
 
     function applyIcuePersonalization() {
+      // Writes CSS variables on documentElement (= the :root selector) so
+      // the values cascade to .widget-bg the same way the static :root
+      // defaults above do. We deliberately DON'T use rootEl here because
+      // applyIcuePersonalization fires from globalThis.icueEvents on
+      // onICUEInitialized — which can land before the `const rootEl =
+      // document.getElementById('root')` declaration further down in this
+      // module evaluates. Touching rootEl from here would crash with a
+      // temporal-dead-zone ReferenceError on the user's machine (where
+      // iCUE pushes the default property values immediately), leaving the
+      // widget stuck at "Connecting…". documentElement is always reachable.
+      const docRoot = document.documentElement;
+
       const bg = getIcueProperty('backgroundColor');
       // Defensive: iCUE color properties come in as hex strings (#rrggbb
       // or #rgb). Anything else (legacy named colors, malformed entries)
       // we drop on the floor and keep the previous value — better than
       // breaking the bg layer with an invalid CSS color string.
       if (typeof bg === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(bg)) {
-        rootEl.style.setProperty('--bg-color', bg);
+        docRoot.style.setProperty('--bg-color', bg);
       }
 
       // Transparency 0-100 maps directly to --bg-opacity 0-1, matching the
@@ -1325,7 +1338,7 @@
       const n = typeof t === 'number' ? t : Number(t);
       if (Number.isFinite(n)) {
         const clamped = Math.max(0, Math.min(100, n));
-        rootEl.style.setProperty('--bg-opacity', String(clamped / 100));
+        docRoot.style.setProperty('--bg-opacity', String(clamped / 100));
       }
     }
 
@@ -1466,7 +1479,7 @@
     let lastFillRatio = -1;
     let lastSourceVisible = null;     // bool: should the source line show?
     let lastSourceAlbum = null;       // string we last wrote to .album
-    let lastLibMode = null;           // 'connect' | 'playlists'
+    let lastLibMode = null;           // 'connect' | 'playlists' | 'back' | 'hidden'
     let pulseTimeout = null;
     let eqLayoutCache = null;
 
@@ -1603,14 +1616,23 @@
     const CONNECT_SVG =
       '<circle cx="12" cy="12" r="10"/>' +
       '<path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>';
+    function spotifyUiActive() {
+      return lastIsSpotify;
+    }
+
     function setLibMode() {
       let mode;
-      if (!spotifyAuthed) mode = 'connect';
-      else if (currentView === 'playlists' || currentView === 'audio-source') mode = 'back';
+      if (currentView === 'audio-source') mode = 'back';
+      else if (!spotifyUiActive()) mode = 'hidden';
+      else if (!spotifyAuthed) mode = 'connect';
+      else if (currentView === 'playlists') mode = 'back';
       else mode = 'playlists';
+      libBtn.classList.toggle('hidden', mode === 'hidden');
       if (mode === lastLibMode) return;
       lastLibMode = mode;
-      if (mode === 'back') {
+      if (mode === 'hidden') {
+        libBtn.setAttribute('aria-label', 'Spotify controls unavailable for this media source');
+      } else if (mode === 'back') {
         libIcon.innerHTML = BACK_SVG;
         libIcon.setAttribute('fill', 'none');
         libIcon.setAttribute('stroke', 'currentColor');
@@ -1672,21 +1694,24 @@
     toggleBtn.addEventListener('click', () => postAction('toggle', 'toggle'));
     nextBtn.addEventListener('click', () => postAction('next', 'next'));
     libBtn.addEventListener('click', async () => {
-      if (lastLibMode === 'connect') {
+      if (currentView === 'audio-source') {
+        // Inside the audio-source sub-view -> tap back goes to wherever
+        // the picker was opened from (playlists or settings).
+        setView(audioSourceFrom);
+      } else if (!spotifyUiActive()) {
+        return;
+      } else if (lastLibMode === 'connect') {
         // POST /api/spotify/connect — host opens the user's default browser
         // to the Spotify auth URL via the betterxeneonwidget:// scheme.
         try { await fetch(HOST + '/api/spotify/connect', { method: 'POST' }); }
         catch { /* surfaced by next poll's status */ }
-      } else if (currentView === 'audio-source') {
-        // Inside the audio-source sub-view → tap back goes to wherever
-        // the picker was opened from (playlists or settings).
-        setView(audioSourceFrom);
       } else {
         // Authed and on lyrics/queue/playlists: toggle playlists view.
         setView(currentView === 'playlists' ? 'lyrics' : 'playlists');
       }
     });
     queueBtn.addEventListener('click', () => {
+      if (!spotifyUiActive()) return;
       setView(currentView === 'queue' ? 'lyrics' : 'queue');
     });
     settingsBtn.addEventListener('click', () => {
@@ -1695,7 +1720,7 @@
 
     // --- Up-next renderer + Spotify queue/playlists pollers --------------
     function setUpnext(text) {
-      const v = text || '';
+      const v = spotifyAuthed && spotifyUiActive() ? (text || '') : '';
       if (v === lastUpnextText) return;
       lastUpnextText = v;
       if (v) {
@@ -1713,7 +1738,7 @@
     }
 
     async function pollSpotifyQueue(forceRefresh = false) {
-      if (!spotifyAuthed) {
+      if (!spotifyAuthed || !spotifyUiActive()) {
         setUpnext('');
         spotifyQueue = [];
         // The queue is what we fall back to when lyrics are absent, so a
@@ -1754,7 +1779,7 @@
     }
 
     async function pollSpotifyPlaylists() {
-      if (!spotifyAuthed) {
+      if (!spotifyAuthed || !spotifyUiActive()) {
         spotifyPlaylists = [];
         if (currentView === 'playlists') applyView();
         return;
@@ -1877,12 +1902,19 @@
       // user is on queue/playlists/audio-source/settings, or the default
       // 'lyrics' state has fallen back to queue because there are no
       // lyrics to show.
+      if (currentView === 'settings' || currentView === 'audio-source') return true;
+      if (!spotifyUiActive()) return false;
       if (currentView !== 'lyrics') return true;
       return parsedLyrics.length === 0 || !optShowLyrics;
     }
 
     function setView(view) {
       const prev = currentView;
+      if (!spotifyUiActive() && (view === 'queue' || view === 'playlists')) {
+        view = 'lyrics';
+      } else if (!spotifyAuthed && view === 'playlists') {
+        view = 'lyrics';
+      }
       currentView = view;
       // Prime the relevant data so the list isn't blank on first open.
       if (view === 'playlists') pollSpotifyPlaylists();
@@ -2842,6 +2874,9 @@
     }, 1000);
 
     function applyView() {
+      if (!spotifyUiActive() && (currentView === 'queue' || currentView === 'playlists')) {
+        currentView = 'lyrics';
+      }
       const hasLyrics = parsedLyrics.length > 0 && optShowLyrics;
       // 'lyrics' is the implicit default — but if we don't have any to
       // show, the list-view takes over and renders the queue. Tracking
@@ -2849,7 +2884,8 @@
       // track change can reset us back to "show lyrics if you have
       // them" without forgetting that the user previously had us on
       // the queue (we just re-evaluate every track).
-      const showList = currentView !== 'lyrics' || !hasLyrics;
+      const showList = currentView === 'settings' || currentView === 'audio-source' ||
+        (spotifyUiActive() && (currentView !== 'lyrics' || !hasLyrics));
 
       lyricsEl.classList.toggle('hidden', showList);
       listViewEl.classList.toggle('hidden', !showList);
@@ -2868,7 +2904,7 @@
       // When the user explicitly opens queue, it stays visible as the
       // toggle back to lyrics.
       const queueIsImplicitFallback = showList && currentView === 'lyrics';
-      queueBtn.classList.toggle('hidden', queueIsImplicitFallback);
+      queueBtn.classList.toggle('hidden', !spotifyUiActive() || queueIsImplicitFallback);
       // Active class mirrors the user's explicit choice, not the
       // effective view — a lyrics-less track's auto-fallback shouldn't
       // light the toggle up.
@@ -3572,7 +3608,21 @@
         const fetchEnd = performance.now();
 
         const wasAuthed = spotifyAuthed;
+        const wasSpotifySource = lastIsSpotify;
         spotifyAuthed = !!ss.connected;
+        lastIsSpotify = !!np.isSpotify && !!np.hasSession;
+        let spotifySourceChanged = wasSpotifySource !== lastIsSpotify;
+        if (!lastIsSpotify) {
+          if (currentView === 'queue' || currentView === 'playlists') {
+            currentView = 'lyrics';
+            spotifySourceChanged = true;
+          }
+          if (spotifyQueue.length > 0) {
+            spotifyQueue = [];
+            spotifySourceChanged = true;
+          }
+          setUpnext('');
+        }
         setLibMode();
         // (No /api/spotify/playback poll here.) SMTC already gives us
         // title/artist/album/position/duration/state for the local audio
@@ -3584,8 +3634,8 @@
 
         // Auth flipped — kick the slow Spotify pollers (queue + playlists)
         // immediately on first connect, and stop them on disconnect.
-        if (spotifyAuthed && !wasAuthed) {
-          pollSpotifyQueue();
+        if (spotifyAuthed && lastIsSpotify && (!wasAuthed || !wasSpotifySource)) {
+          pollSpotifyQueue(true);
           pollSpotifyPlaylists();
         } else if (!spotifyAuthed && wasAuthed) {
           spotifyQueue = [];
@@ -3596,13 +3646,14 @@
           // nothing to show without a token.
           if (currentView === 'playlists') currentView = 'lyrics';
           applyView();
+        } else if (spotifySourceChanged) {
+          applyView();
         }
 
         const title = np.hasSession ? (np.title || 'Unknown title') : 'Nothing playing';
         const artist = np.hasSession ? (np.artist || '') : '';
         if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
         if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
-        lastIsSpotify = !!np.isSpotify && !!np.hasSession;
         // Source line: visible only when Spotify is the SMTC source.
         // (Other sources just don't show this line — title/artist alone is
         // enough for non-Spotify SMTC playback.)
