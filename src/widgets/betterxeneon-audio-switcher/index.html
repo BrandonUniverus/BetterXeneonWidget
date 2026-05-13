@@ -14,20 +14,10 @@
           data-max="5000"
           data-step="100">
 
-    <meta name="x-icue-property" content="useSystemAccent"
-          data-label="tr('Use Windows Accent Color')"
-          data-type="switch"
-          data-default="true">
-
     <meta name="x-icue-property" content="textColor"
           data-label="tr('Text Color')"
           data-type="color"
           data-default="'#ffffff'">
-
-    <meta name="x-icue-property" content="accentColor"
-          data-label="tr('Custom Accent Color')"
-          data-type="color"
-          data-default="'#0078d4'">
 
     <meta name="x-icue-property" content="backgroundColor"
           data-label="tr('Background Color')"
@@ -51,7 +41,7 @@
     <script id="x-icue-groups" type="application/json">
       [
         { "title": "tr('Behavior')", "properties": ["pollIntervalMs"] },
-        { "title": "tr('Appearance')", "properties": ["useSystemAccent", "textColor", "accentColor", "backgroundColor", "transparency"] }
+        { "title": "tr('Appearance')", "properties": ["textColor", "backgroundColor", "transparency"] }
       ]
     </script>
 

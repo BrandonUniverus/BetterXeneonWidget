@@ -13,35 +13,6 @@
        settings panel deliberately exposes nothing for this widget — one
        source of truth keeps the UX coherent and lets us add new settings
        without re-registering iCUE meta tags. -->
-
-  <!-- Two iCUE properties so the widget respects the values iCUE's
-       "Screens Personalization" panel pushes (Widget Background +
-       Widget Transparency). All other widget options live in the
-       in-widget Settings view, persisted via the host — see the
-       "Widget settings (host-backed)" section below. These two stay
-       as iCUE properties specifically so the per-screen / per-page
-       Personalization controls work without a separate copy in the
-       widget UI.
-
-       Naming + defaults follow the WidgetBuilder kit's recommended
-       Personalization group (see references/html-template.md):
-       transparency default=100 means fully opaque; the slider value
-       maps directly to background opacity (percent / 100). -->
-  <meta name="x-icue-property" content="backgroundColor"
-        data-label="tr('Widget Background')"
-        data-type="color"
-        data-default="'#000000'">
-  <meta name="x-icue-property" content="transparency"
-        data-label="tr('Widget Transparency')"
-        data-type="slider"
-        data-default="100"
-        data-min="0"
-        data-max="100"
-        data-step="1">
-  <script id="x-icue-groups" type="application/json">
-    [{ "title": "tr('Widget Personalization')", "properties": ["backgroundColor", "transparency"] }]
-  </script>
-
   <!-- ====================================================================
        Crash-visibility overlay. Installed BEFORE the main module so that
        a syntax error / TDZ ReferenceError / unhandled rejection during
@@ -130,15 +101,17 @@
       --theme-accent-rgb: 29, 185, 84;
       --theme-accent-fg: #08130c;
       --theme-accent-dim: #14823c;
-      /* iCUE-driven Widget Personalization (see x-icue-property meta tags
-         in the head). --bg-color drives the .widget-bg layer's color;
-         --bg-opacity drives its opacity (1 = fully opaque, 0 = transparent).
-         Both update at runtime from applyIcuePersonalization() which fires
-         on onICUEInitialized + onDataUpdated. Defaults match the iCUE
-         property defaults so first paint before iCUE injects values still
-         shows a sensible opaque-black backdrop. */
-      --bg-color: #000000;
+      /* Appearance defaults. The media widget does not expose iCUE
+         Appearance controls; these variables are kept as internal styling
+         tokens. */
+      --text-color: #ffffff;
+      --text-rgb: 255, 255, 255;
+      --bg-color: #0a0a0c;
+      --bg-rgb: 10, 10, 12;
       --bg-opacity: 1;
+      --art-bg-opacity: 0.95;
+      --settings-bg-alpha: 0.85;
+      --reflection-bg-alpha: 0.35;
     }
     .theme-rainbow {
       /* Rainbow palette cycles, so we pick a single accent that doesn't
@@ -187,7 +160,7 @@
          because the opaque body sits behind .widget-bg in the stack
          and "wins" at any opacity less than 1. */
       background: transparent;
-      color: #fff;
+      color: var(--text-color, #ffffff);
       overflow: hidden;
       font-family: system-ui, -apple-system, sans-serif;
       -webkit-font-smoothing: antialiased;
@@ -227,8 +200,7 @@
     .widget-bg {
       position: absolute;
       inset: 0;
-      background-color: var(--bg-color, #000000);
-      opacity: var(--bg-opacity, 1);
+      background-color: rgba(var(--bg-rgb, 10, 10, 12), var(--bg-opacity, 1));
       pointer-events: none;
       z-index: -2;
       transition: opacity 200ms ease, background-color 200ms ease;
@@ -255,7 +227,7 @@
       opacity: 0;
       transition: opacity 350ms ease;
     }
-    .art-bg.show { opacity: 0.95; }
+    .art-bg.show { opacity: var(--art-bg-opacity, 0.95); }
     .root.size-wide {
       flex-direction: row;
       justify-content: flex-start;
@@ -426,7 +398,7 @@
       border-radius: 50%;
       border: none;
       background: #1c1c22;
-      color: #fff;
+      color: var(--text-color, #ffffff);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -548,7 +520,7 @@
       border: 1px solid rgba(255, 255, 255, 0.10);
       border-radius: 999px;
       background: rgba(0, 0, 0, 0.55);
-      color: rgba(255, 255, 255, 0.78);
+      color: rgba(var(--text-rgb, 255, 255, 255), 0.78);
       font-size: 14px;
       font-weight: 600;
       cursor: pointer;
@@ -646,7 +618,7 @@
       padding: 8px 4px;
       border: 1px solid var(--theme-accent);
       background: transparent;
-      color: rgba(255, 255, 255, 0.78);
+      color: rgba(var(--text-rgb, 255, 255, 255), 0.78);
       cursor: pointer;
       border-radius: 6px;
       font-size: 15px;
@@ -760,7 +732,7 @@
     .root.settings-mode .upnext-chip,
     .root.settings-mode .queue-btn:not(.settings-btn) { display: none; }
     .root.settings-mode .list-view {
-      background: rgba(0, 0, 0, 0.85);
+      background: rgba(var(--bg-rgb, 10, 10, 12), var(--settings-bg-alpha, 0.85));
       border-radius: 0 0 10px 10px;
       margin-top: -10px;
       padding: 20px 12px 10px;
@@ -840,13 +812,13 @@
       display: block;
       z-index: 0;
       opacity: 1;
-      background: #0a0a0c;
+      background: transparent;
     }
     .eq-visualizer.show-bg.eq-mode-bars,
     .eq-visualizer.show-full.eq-mode-bars {
       background: linear-gradient(to bottom,
-        var(--bg-color, #000000) 0,
-        var(--bg-color, #000000) var(--eq-reflection-y),
+        #000000 0,
+        #000000 var(--eq-reflection-y),
         #0a0a0c var(--eq-reflection-y),
         #0a0a0c 100%);
     }
@@ -1017,7 +989,7 @@
     .lyrics .line {
       padding: 4px 8px;
       opacity: 0.30;
-      color: #fff;
+      color: var(--text-color, #ffffff);
       font-weight: 500;
       text-align: center;       /* always centered — see UX note in commit history */
       letter-spacing: 0;
@@ -1099,7 +1071,7 @@
       border-radius: 999px;
       border: none;
       background: #1c1c22;
-      color: #fff;
+      color: var(--text-color, #ffffff);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1354,14 +1326,10 @@
       saveSettings();
     }
 
-    // ---- iCUE property bridge (Screens Personalization) ---------------
-    // iCUE injects declared `x-icue-property` values as globals into the
-    // widget's JS context. We read them through getIcueProperty (handles
-    // both the window-property path and the sandboxed-Function path —
-    // see references/lifecycle-and-plugins.md) on every onDataUpdated tick
-    // and apply them to the .widget-bg layer via CSS variables. Cheap
-    // enough to run unconditionally on every tick — three property reads
-    // + two style writes, no DOM walks.
+    // ---- iCUE lifecycle ------------------------------------------------
+    // Kept for WidgetBuilder lifecycle compatibility. Media no longer
+    // declares Appearance properties, so these reads normally fall through
+    // to the CSS defaults.
     function getIcueProperty(name) {
       if (typeof window !== 'undefined' && Object.prototype.hasOwnProperty.call(window, name)) {
         const value = window[name];
@@ -1386,14 +1354,37 @@
       // iCUE pushes the default property values immediately), leaving the
       // widget stuck at "Connecting…". documentElement is always reachable.
       const docRoot = document.documentElement;
+      const hexToRgb = value => {
+        const m = typeof value === 'string'
+          ? value.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
+          : null;
+        if (!m) return null;
+        const hex = m[1].length === 3
+          ? m[1].split('').map(c => c + c).join('')
+          : m[1];
+        return [
+          parseInt(hex.slice(0, 2), 16),
+          parseInt(hex.slice(2, 4), 16),
+          parseInt(hex.slice(4, 6), 16),
+        ];
+      };
+
+      const text = getIcueProperty('textColor');
+      const textRgb = hexToRgb(text);
+      if (textRgb) {
+        docRoot.style.setProperty('--text-color', text);
+        docRoot.style.setProperty('--text-rgb', textRgb.join(', '));
+      }
 
       const bg = getIcueProperty('backgroundColor');
       // Defensive: iCUE color properties come in as hex strings (#rrggbb
       // or #rgb). Anything else (legacy named colors, malformed entries)
       // we drop on the floor and keep the previous value — better than
       // breaking the bg layer with an invalid CSS color string.
-      if (typeof bg === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(bg)) {
+      const bgRgb = hexToRgb(bg);
+      if (bgRgb) {
         docRoot.style.setProperty('--bg-color', bg);
+        docRoot.style.setProperty('--bg-rgb', bgRgb.join(', '));
       }
 
       // Transparency 0-100 maps directly to --bg-opacity 0-1, matching the
@@ -1404,7 +1395,11 @@
       const n = typeof t === 'number' ? t : Number(t);
       if (Number.isFinite(n)) {
         const clamped = Math.max(0, Math.min(100, n));
-        docRoot.style.setProperty('--bg-opacity', String(clamped / 100));
+        const opacity = clamped / 100;
+        docRoot.style.setProperty('--bg-opacity', String(opacity));
+        docRoot.style.setProperty('--art-bg-opacity', String(opacity * 0.95));
+        docRoot.style.setProperty('--settings-bg-alpha', String(opacity * 0.85));
+        docRoot.style.setProperty('--reflection-bg-alpha', String(opacity * 0.35));
       }
     }
 

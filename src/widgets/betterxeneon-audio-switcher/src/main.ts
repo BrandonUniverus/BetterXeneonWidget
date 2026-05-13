@@ -17,15 +17,10 @@ function applyTheme(): void {
   const bg = getIcueProperty<string>('backgroundColor');
   const transparency = getIcueProperty<number>('transparency');
 
-  const useSystem = getIcueProperty<boolean>('useSystemAccent');
-  const customAccent = getIcueProperty<string>('accentColor');
-
-  // Pull system accent and the shared widget-settings snapshot in a single
-  // subscribe() call — read once, unsubscribe immediately.
-  let systemAccent: string | null = null;
+  // Pull the shared widget-settings snapshot in a single subscribe() call:
+  // read once, unsubscribe immediately.
   let publishedAccent: string | null = null;
   appStore.subscribe(s => {
-    systemAccent = s.systemAccentColor;
     const v = s.widgetSettings?.currentThemeAccent;
     publishedAccent = typeof v === 'string' && HEX_RE.test(v) ? v : null;
   })();
@@ -33,18 +28,10 @@ function applyTheme(): void {
   // Resolution order for the accent:
   //   1. `currentThemeAccent` published by the media widget — already the
   //      *effective* accent (album-derived hex when theme=0, or the named
-  //      palette's hex for theme 1..5). This is the "match the other
-  //      widget" behavior. Missing when the media widget hasn't run yet.
-  //   2. iCUE custom accent (only when useSystemAccent is explicitly off).
-  //      Kept for backwards-compat — the widget no longer exposes these
-  //      in its UI but old saved values might still be present.
-  //   3. Host-reported Windows system accent.
-  //   4. Hard-coded FALLBACK_ACCENT (Windows blue).
-  const accent =
-    publishedAccent
-      ?? (useSystem === false && typeof customAccent === 'string' && customAccent
-            ? customAccent
-            : systemAccent ?? customAccent ?? FALLBACK_ACCENT);
+  //      palette's hex for theme 1..5). This is the "match the media
+  //      widget" behavior.
+  //   2. Hard-coded fallback until the shared setting is available.
+  const accent = publishedAccent ?? FALLBACK_ACCENT;
 
   if (typeof text === 'string' && text) root.style.setProperty('--text-color', text);
   if (typeof bg === 'string' && bg) root.style.setProperty('--bg-color', bg);
@@ -59,15 +46,6 @@ function applyTheme(): void {
   if (Number.isFinite(t)) {
     const clamped = Math.max(0, Math.min(100, t));
     root.style.setProperty('--bg-opacity', String(clamped / 100));
-  }
-}
-
-async function loadSystemAccent(): Promise<void> {
-  try {
-    const accent = await host.getAccentColor();
-    appStore.update(s => ({ ...s, systemAccentColor: accent.hex }));
-  } catch {
-    /* fall back to FALLBACK_ACCENT until host is reachable */
   }
 }
 
@@ -105,14 +83,13 @@ document.addEventListener('selectstart', e => e.preventDefault());
 void loadConfig();
 startPolling();
 const app = mount(App, { target });
-void loadSystemAccent();
 void refreshWidgetSettings();
 
 let lastThemeKey = '';
 appStore.subscribe(s => {
   const rawAccent = s.widgetSettings?.currentThemeAccent;
   const themeAccent = typeof rawAccent === 'string' && HEX_RE.test(rawAccent) ? rawAccent : '';
-  const key = `${s.systemAccentColor ?? ''}|${themeAccent}`;
+  const key = themeAccent;
   if (key === lastThemeKey) return;
   lastThemeKey = key;
   applyTheme();

@@ -11,7 +11,6 @@ export interface AppStateValue {
   sessions: AudioSession[];
   pinnedIds: string[];
   view: View;
-  systemAccentColor: string | null;
   // True while the user is actively dragging a slider — suppresses
   // polling-driven volume overwrites for the affected target.
   adjustingDeviceId: string | null;
@@ -47,7 +46,6 @@ const initial: AppStateValue = {
   sessions: [],
   pinnedIds: [],
   view: 'outputs',
-  systemAccentColor: null,
   adjustingDeviceId: null,
   adjustingSessionId: null,
   pendingDefaultId: null,
