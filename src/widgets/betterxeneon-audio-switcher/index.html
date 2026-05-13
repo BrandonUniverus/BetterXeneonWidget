@@ -34,10 +34,16 @@
           data-type="color"
           data-default="'#0a0a0c'">
 
+    <!-- "Transparency" follows the iCUE WidgetBuilder kit convention:
+         100 = fully opaque, 0 = fully transparent, default 100. iCUE's
+         Screens Personalization "Widget Transparency" slider pushes its
+         value into this property using the same semantic, so the slider
+         direction matches what the user sees in the Personalization panel
+         (right = more opaque). -->
     <meta name="x-icue-property" content="transparency"
           data-label="tr('Background Transparency')"
           data-type="slider"
-          data-default="0"
+          data-default="100"
           data-min="0"
           data-max="100"
           data-step="1">

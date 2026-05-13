@@ -14,18 +14,32 @@
        source of truth keeps the UX coherent and lets us add new settings
        without re-registering iCUE meta tags. -->
 
-  <!-- iCUE requires AT LEAST ONE x-icue-property to import the widget
-       (an empty groups script or no properties at all is rejected as
-       "Unsupported or corrupted file" even when icueEvents is declared).
-       Ship a single hidden no-op property + dummy group purely to
-       satisfy the importer. The property's value is never read by the
-       widget — it's just there to keep iCUE happy. -->
-  <meta name="x-icue-property" content="_icuePlaceholder"
-        data-label="tr('(internal)')"
-        data-type="switch"
-        data-default="false">
+  <!-- Two iCUE properties so the widget respects the values iCUE's
+       "Screens Personalization" panel pushes (Widget Background +
+       Widget Transparency). All other widget options live in the
+       in-widget Settings view, persisted via the host — see the
+       "Widget settings (host-backed)" section below. These two stay
+       as iCUE properties specifically so the per-screen / per-page
+       Personalization controls work without a separate copy in the
+       widget UI.
+
+       Naming + defaults follow the WidgetBuilder kit's recommended
+       Personalization group (see references/html-template.md):
+       transparency default=100 means fully opaque; the slider value
+       maps directly to background opacity (percent / 100). -->
+  <meta name="x-icue-property" content="backgroundColor"
+        data-label="tr('Widget Background')"
+        data-type="color"
+        data-default="'#000000'">
+  <meta name="x-icue-property" content="transparency"
+        data-label="tr('Widget Transparency')"
+        data-type="slider"
+        data-default="100"
+        data-min="0"
+        data-max="100"
+        data-step="1">
   <script id="x-icue-groups" type="application/json">
-    [{ "title": "tr('(internal)')", "properties": ["_icuePlaceholder"] }]
+    [{ "title": "tr('Widget Personalization')", "properties": ["backgroundColor", "transparency"] }]
   </script>
 
   <style>
@@ -56,6 +70,15 @@
       --theme-accent-rgb: 29, 185, 84;
       --theme-accent-fg: #08130c;
       --theme-accent-dim: #14823c;
+      /* iCUE-driven Widget Personalization (see x-icue-property meta tags
+         in the head). --bg-color drives the .widget-bg layer's color;
+         --bg-opacity drives its opacity (1 = fully opaque, 0 = transparent).
+         Both update at runtime from applyIcuePersonalization() which fires
+         on onICUEInitialized + onDataUpdated. Defaults match the iCUE
+         property defaults so first paint before iCUE injects values still
+         shows a sensible opaque-black backdrop. */
+      --bg-color: #000000;
+      --bg-opacity: 1;
     }
     .theme-rainbow {
       /* Rainbow palette cycles, so we pick a single accent that doesn't
@@ -123,6 +146,26 @@
       gap: 12px;
       align-items: center;
       overflow: hidden;         /* clip the bg blur halo to the cell */
+    }
+
+    /* iCUE Widget Background layer. Sits at z-index -2 so it's behind
+       .art-bg (which is at -1) — the album-art bg shows ON TOP of this
+       solid color, dimmed by its own filter chain. When the user drops
+       Widget Transparency to expose the desktop, the album-art bg fades
+       proportionally too (it's a sibling using the SAME opacity logic
+       below, not a stack-on-stack — see .art-bg's transition above).
+
+       Color comes from iCUE's "Widget Background" picker via --bg-color;
+       opacity from "Widget Transparency" via --bg-opacity (where 1 means
+       fully opaque, matching the kit convention). */
+    .widget-bg {
+      position: absolute;
+      inset: 0;
+      background-color: var(--bg-color, #000000);
+      opacity: var(--bg-opacity, 1);
+      pointer-events: none;
+      z-index: -2;
+      transition: opacity 200ms ease, background-color 200ms ease;
     }
 
     /* FLICKER TEST: re-introducing the album-art bg layer the way it
@@ -716,6 +759,7 @@
       inset: 0;
       width: 100%;
       height: 100%;
+      --eq-reflection-y: 50%;
       display: none;
       pointer-events: none;
       overflow: hidden;
@@ -731,6 +775,14 @@
       z-index: 0;
       opacity: 1;
       background: #0a0a0c;
+    }
+    .eq-visualizer.show-bg.eq-mode-bars,
+    .eq-visualizer.show-full.eq-mode-bars {
+      background: linear-gradient(to bottom,
+        #000 0,
+        #000 var(--eq-reflection-y),
+        #0a0a0c var(--eq-reflection-y),
+        #0a0a0c 100%);
     }
     .eq-visualizer:not(.eq-mode-bars) .eq-slot { display: none !important; }
     .eq-slot {
@@ -1042,6 +1094,12 @@
 </head>
 <body>
   <main class="root size-vertical" id="root">
+    <!-- iCUE-themable solid background. Driven by the Screens Personalization
+         "Widget Background" (color) + "Widget Transparency" (opacity) values
+         pushed through the backgroundColor / transparency iCUE properties.
+         Renders behind the album-art bg layer below — both fade together
+         when the user dials transparency down. -->
+    <div class="widget-bg" id="widgetBg" aria-hidden="true"></div>
     <!-- crossorigin: required so canvas getImageData on the foreground art
          doesn't taint and we can extract the dominant color for the
          equalizer's two-tone gradient. The host's CORS policy is wide
@@ -1229,16 +1287,63 @@
       saveSettings();
     }
 
-    // iCUE lifecycle stub. The icuewidget CLI validator rejects any
-    // widget that doesn't declare `globalThis.icueEvents` with these
-    // two handlers — even when (as here) the widget no longer surfaces
-    // any iCUE-managed properties. Keeping them as no-ops is enough to
-    // pass validation and import cleanly. All settings flow through the
-    // host (loadSettings / saveSettings / updateSetting) instead.
+    // ---- iCUE property bridge (Screens Personalization) ---------------
+    // iCUE injects declared `x-icue-property` values as globals into the
+    // widget's JS context. We read them through getIcueProperty (handles
+    // both the window-property path and the sandboxed-Function path —
+    // see references/lifecycle-and-plugins.md) on every onDataUpdated tick
+    // and apply them to the .widget-bg layer via CSS variables. Cheap
+    // enough to run unconditionally on every tick — three property reads
+    // + two style writes, no DOM walks.
+    function getIcueProperty(name) {
+      if (typeof window !== 'undefined' && Object.prototype.hasOwnProperty.call(window, name)) {
+        const value = window[name];
+        if (value !== undefined && value !== null && value !== '') return value;
+      }
+      try {
+        const value = Function('return typeof ' + name + ' !== "undefined" ? ' + name + ' : undefined')();
+        if (value !== undefined && value !== null && value !== '') return value;
+      } catch (e) {}
+      return undefined;
+    }
+
+    function applyIcuePersonalization() {
+      const bg = getIcueProperty('backgroundColor');
+      // Defensive: iCUE color properties come in as hex strings (#rrggbb
+      // or #rgb). Anything else (legacy named colors, malformed entries)
+      // we drop on the floor and keep the previous value — better than
+      // breaking the bg layer with an invalid CSS color string.
+      if (typeof bg === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(bg)) {
+        rootEl.style.setProperty('--bg-color', bg);
+      }
+
+      // Transparency 0-100 maps directly to --bg-opacity 0-1, matching the
+      // kit convention (100 = fully opaque). Numeric guard catches the
+      // moment before iCUE first injects the value when it can be a
+      // string or undefined.
+      const t = getIcueProperty('transparency');
+      const n = typeof t === 'number' ? t : Number(t);
+      if (Number.isFinite(n)) {
+        const clamped = Math.max(0, Math.min(100, n));
+        rootEl.style.setProperty('--bg-opacity', String(clamped / 100));
+      }
+    }
+
+    // iCUE lifecycle. The icuewidget CLI validator rejects any widget
+    // that doesn't declare `globalThis.icueEvents` with these two handlers;
+    // both fire applyIcuePersonalization so the widget tracks Personalization
+    // changes live (the panel's color picker / slider trigger onDataUpdated
+    // on commit).
     globalThis.icueEvents = {
-      onICUEInitialized: () => {},
-      onDataUpdated: () => {},
+      onICUEInitialized: () => { applyIcuePersonalization(); },
+      onDataUpdated: () => { applyIcuePersonalization(); },
     };
+
+    // Initial paint before iCUE has fired onICUEInitialized. If iCUE was
+    // already initialized when this script ran (some QtWebEngine builds
+    // race the script tags ahead of the event), pick up any properties
+    // that are already there. The CSS defaults cover us either way.
+    applyIcuePersonalization();
 
     // Live snapshots of each Behavior option. The auto-expand pair is
     // parked here until the listening-mode phase lands — registering them
@@ -2487,6 +2592,7 @@
           numBars,
           reflectFactor: 1.0,
         };
+        eqVisualizer.style.setProperty('--eq-reflection-y', drawBaseY.toFixed(2) + 'px');
 
         for (let i = 0; i < EQ_BAR_COUNT; i++) {
           const parts = eqBars[i];

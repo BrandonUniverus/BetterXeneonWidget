@@ -50,11 +50,15 @@ function applyTheme(): void {
   if (typeof bg === 'string' && bg) root.style.setProperty('--bg-color', bg);
   root.style.setProperty('--accent-color', accent);
 
-  // "Background Transparency" — 0 means fully opaque, 100 means fully transparent.
-  const t = typeof transparency === 'number' ? transparency : Number(transparency ?? 0);
+  // "Transparency" follows the iCUE WidgetBuilder kit convention used by
+  // the Screens Personalization "Widget Transparency" slider: 100 = fully
+  // opaque, 0 = fully transparent. The property value maps directly to
+  // --bg-opacity (a percent / 100). Default is 100 (declared in index.html)
+  // so a fresh install renders opaque until the user dials it back.
+  const t = typeof transparency === 'number' ? transparency : Number(transparency ?? 100);
   if (Number.isFinite(t)) {
     const clamped = Math.max(0, Math.min(100, t));
-    root.style.setProperty('--bg-opacity', String((100 - clamped) / 100));
+    root.style.setProperty('--bg-opacity', String(clamped / 100));
   }
 }
 
