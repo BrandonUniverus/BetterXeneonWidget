@@ -11,6 +11,21 @@
   let status = $state<SteelSeriesStatus | null>(null);
   let swapping = $state(false);
   let lastError = $state<string | null>(null);
+  const devices = $derived(status?.devices ?? []);
+  const currentDevice = $derived(
+    devices.find(d => d.id === status?.currentDeviceId)
+      ?? devices.find(d => d.isCurrent)
+      ?? devices[0]
+      ?? null
+  );
+  const currentIndex = $derived(currentDevice ? devices.findIndex(d => d.id === currentDevice.id) : -1);
+  const nextDevice = $derived(
+    devices.length > 1
+      ? devices[(currentIndex >= 0 ? currentIndex + 1 : 1) % devices.length]
+      : null
+  );
+  const isTwoDeviceSwitch = $derived(devices.length === 2);
+  const secondDeviceActive = $derived(isTwoDeviceSwitch && currentIndex === 1);
 
   // Poll every 4s. Sonar state only changes via this widget OR the user's
   // hotkey OR the Sonar UI — we don't need a tight cadence here. After a
@@ -55,8 +70,7 @@
             })),
           };
         }
-        // Re-fetch to pick up any divergence (e.g. Sonar reordered devices).
-        void refresh();
+        await refresh();
       } else {
         lastError = result.error ?? 'Swap failed';
       }
@@ -66,44 +80,72 @@
       swapping = false;
     }
   }
+
+  function shortName(name: string | null | undefined): string {
+    const full = name ?? '';
+    const paren = full.match(/\(([^)]*)\)/)?.[1]?.trim();
+    const cleaned = full
+      .replace(/^Headphones\s*/i, '')
+      .replace(/^Speakers\s*/i, '')
+      .replace(/\s*\([^)]*\)\s*$/g, '')
+      .trim();
+    return cleaned || paren || full;
+  }
 </script>
 
-{#if status?.available && status.devices.length > 1}
+{#if status?.available && devices.length > 1}
   <button
-    class="row"
+    class="sonar-switch"
     class:swapping
+    class:second-active={secondDeviceActive}
     type="button"
     onclick={onSwap}
     disabled={swapping}
     aria-label="Swap SteelSeries Sonar output device"
     title={lastError ?? 'Cycle Sonar to the next output device'}
   >
-    <span class="badge" aria-hidden="true">SS</span>
-    <span class="label">
-      <span class="title">Sonar output</span>
-      <span class="device">{status.currentDeviceName ?? '—'}</span>
+    <span class="label" aria-hidden="true">
+      <span class="badge">SS</span>
+      <span class="title">Sonar</span>
     </span>
+
+    <span class="switch-body">
+      {#if isTwoDeviceSwitch}
+        <span class="toggle-track" aria-hidden="true">
+          <span class="toggle-thumb"></span>
+          {#each devices as device}
+            <span class="toggle-option" class:active={device.id === currentDevice?.id}>{shortName(device.name)}</span>
+          {/each}
+        </span>
+      {:else}
+        <span class="route" aria-hidden="true">
+          <span class="current">{currentDevice?.name ?? status.currentDeviceName ?? 'Unknown'}</span>
+          <span class="arrow">-&gt;</span>
+          <span class="next">{nextDevice?.name ?? 'Next'}</span>
+        </span>
+      {/if}
+
+      {#if lastError}
+        <span class="error">{lastError}</span>
+      {/if}
+    </span>
+
     <span class="action" aria-hidden="true">
       {#if swapping}
-        <svg viewBox="0 0 24 24" class="spinner">
-          <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.5" stroke-dasharray="40 60" stroke-linecap="round"/>
-        </svg>
+        <span class="spinner"></span>
       {:else}
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 7h14l-3-3"/>
-          <path d="M21 17H7l3 3"/>
-        </svg>
+        <span>Next</span>
       {/if}
     </span>
   </button>
 {/if}
 
 <style>
-  .row {
+  .sonar-switch {
     display: flex;
     align-items: center;
-    gap: var(--gap);
-    padding: calc(var(--layout-unit) * 1.4) calc(var(--layout-unit) * 2.2);
+    gap: calc(var(--layout-unit) * 1.5);
+    padding: calc(var(--layout-unit) * 1.2) calc(var(--layout-unit) * 1.4);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -113,54 +155,139 @@
     cursor: pointer;
     transition: background 120ms, border-color 120ms, opacity 120ms;
   }
-  .row:hover { background: var(--surface-strong); border-color: var(--accent-color); }
-  .row:active { transform: translateY(1px); }
-  .row[disabled] { cursor: progress; opacity: 0.75; }
+  .sonar-switch:hover { background: var(--surface-strong); border-color: var(--accent-color); }
+  .sonar-switch:active { transform: translateY(1px); }
+  .sonar-switch[disabled] { cursor: progress; opacity: 0.75; }
+
+  .label {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: calc(var(--layout-unit) * 0.9);
+    min-width: 0;
+  }
 
   .badge {
-    flex: 0 0 auto;
-    width: clamp(28px, calc(var(--layout-unit) * 4.5), 44px);
-    height: clamp(28px, calc(var(--layout-unit) * 4.5), 44px);
-    display: grid;
+    width: clamp(26px, calc(var(--layout-unit) * 3.9), 38px);
+    height: clamp(26px, calc(var(--layout-unit) * 3.9), 38px);
+    display: inline-grid;
     place-items: center;
-    border-radius: 8px;
-    background: var(--accent-color);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--accent-color) 82%, var(--text-color));
     color: var(--bg-color);
     font-weight: 700;
     font-size: var(--font-label);
-    letter-spacing: 0.04em;
   }
 
-  .label {
-    flex: 1 1 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
   .title {
     font-size: var(--font-label);
-    opacity: 0.6;
+    font-weight: 700;
+    opacity: 0.68;
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
-  .device {
-    font-size: var(--font-body);
-    font-weight: 600;
+
+  .switch-body {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--layout-unit) * 0.6);
+    min-width: 0;
+  }
+
+  .toggle-track {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
+    min-height: clamp(34px, calc(var(--layout-unit) * 5), 48px);
+    padding: calc(var(--layout-unit) * 0.45);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-color) 54%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text-color) 12%, transparent);
+    overflow: hidden;
+  }
+
+  .toggle-thumb {
+    position: absolute;
+    top: calc(var(--layout-unit) * 0.45);
+    bottom: calc(var(--layout-unit) * 0.45);
+    left: calc(var(--layout-unit) * 0.45);
+    width: calc(50% - calc(var(--layout-unit) * 0.45));
+    border-radius: 999px;
+    background: var(--accent-color);
+    transition: left 180ms ease;
+  }
+  .sonar-switch.second-active .toggle-thumb {
+    left: 50%;
+  }
+
+  .toggle-option {
+    position: relative;
+    z-index: 1;
+    display: block;
+    min-width: 0;
+    padding: 0 calc(var(--layout-unit) * 1.2);
+    text-align: center;
+    font-size: var(--font-label);
+    font-weight: 700;
+    color: color-mix(in srgb, var(--text-color) 70%, transparent);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .toggle-option.active {
+    color: var(--bg-color);
+  }
+
+  .route {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: calc(var(--layout-unit) * 0.8);
+    font-size: var(--font-body);
+    font-weight: 600;
+  }
+  .current, .next {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .current { color: var(--accent-color); }
+  .arrow { opacity: 0.45; }
+
+  .error {
+    color: #ff7b8a;
+    font-size: var(--font-label);
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .action {
     flex: 0 0 auto;
-    width: clamp(24px, calc(var(--layout-unit) * 4), 36px);
-    height: clamp(24px, calc(var(--layout-unit) * 4), 36px);
+    min-width: clamp(48px, calc(var(--layout-unit) * 8), 76px);
+    height: clamp(32px, calc(var(--layout-unit) * 4.8), 46px);
     display: grid;
     place-items: center;
-    opacity: 0.75;
+    padding: 0 calc(var(--layout-unit) * 1.3);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-color) 18%, transparent);
+    color: var(--accent-color);
+    border: 1px solid color-mix(in srgb, var(--accent-color) 36%, transparent);
+    font-size: var(--font-label);
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
-  .action svg { width: 100%; height: 100%; }
-  .spinner { animation: spin 900ms linear infinite; transform-origin: center; }
+  .spinner {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--accent-color) 28%, transparent);
+    border-top-color: var(--accent-color);
+    animation: spin 900ms linear infinite;
+  }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>

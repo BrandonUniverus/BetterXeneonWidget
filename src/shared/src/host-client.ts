@@ -42,6 +42,7 @@ export interface SteelSeriesStatus {
   currentDeviceName: string | null;
   currentDeviceId: string | null;
   devices: SteelSeriesDevice[];
+  error?: string | null;
 }
 
 export interface SteelSeriesDevice {
