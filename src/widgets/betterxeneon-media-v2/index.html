@@ -13,19 +13,64 @@
        settings panel deliberately exposes nothing for this widget — one
        source of truth keeps the UX coherent and lets us add new settings
        without re-registering iCUE meta tags. -->
+  <!-- ====================================================================
+       Crash-visibility overlay. Installed BEFORE the main module so that
+       a syntax error / TDZ ReferenceError / unhandled rejection during
+       initialization (the kind that previously left the widget stuck at
+       "Connecting…" forever with no on-screen hint) renders a readable
+       error pane on top of whatever's already in the DOM.
 
-  <!-- iCUE requires AT LEAST ONE x-icue-property to import the widget
-       (an empty groups script or no properties at all is rejected as
-       "Unsupported or corrupted file" even when icueEvents is declared).
-       Ship a single hidden no-op property + dummy group purely to
-       satisfy the importer. The property's value is never read by the
-       widget — it's just there to keep iCUE happy. -->
-  <meta name="x-icue-property" content="_icuePlaceholder"
-        data-label="tr('(internal)')"
-        data-type="switch"
-        data-default="false">
-  <script id="x-icue-groups" type="application/json">
-    [{ "title": "tr('(internal)')", "properties": ["_icuePlaceholder"] }]
+       Deliberately plain-old-script (not module) so its handlers register
+       synchronously during head parsing — by the time any module script
+       below starts evaluating, this is already listening. Self-contained:
+       no external CSS, no helper functions, no dependencies that could
+       themselves crash.
+       ==================================================================== -->
+  <script>
+    (function () {
+      function showError(message, source, lineno, error) {
+        try {
+          var overlay = document.getElementById('__bxw_error_overlay');
+          if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = '__bxw_error_overlay';
+            // Inline styles — the widget's own stylesheet may not have
+            // loaded yet, and even if it has, the error pane needs to be
+            // visually independent so a CSS-related crash still surfaces.
+            overlay.style.cssText =
+              'position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
+              'background:rgba(90,0,16,0.94);color:#fff;' +
+              'font:12px/1.45 ui-monospace,Consolas,monospace;' +
+              'padding:10px 14px;max-height:60vh;overflow-y:auto;' +
+              'white-space:pre-wrap;word-break:break-word;' +
+              'box-shadow:0 4px 14px rgba(0,0,0,0.5);';
+            (document.body || document.documentElement).appendChild(overlay);
+          }
+          var stack = error && error.stack ? '\n' + error.stack : '';
+          var where = source ? ' (' + String(source).split(/[\/\\]/).pop() + ':' + lineno + ')' : '';
+          // Prepend rather than overwrite — multiple errors stack up for
+          // debugging. Keep the first 4 to avoid runaway DOM growth if
+          // something errors in a tight loop.
+          var entry = document.createElement('div');
+          entry.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.15);padding:4px 0;';
+          entry.textContent = 'Widget error: ' + message + where + stack;
+          overlay.insertBefore(entry, overlay.firstChild);
+          while (overlay.childElementCount > 4) overlay.removeChild(overlay.lastChild);
+        } catch (e) {
+          // If the overlay itself fails (no DOM, CSP, etc.), there's
+          // nothing useful to do here except keep the console line.
+          try { console.error('error overlay failed:', e); } catch (_) {}
+        }
+      }
+      window.addEventListener('error', function (e) {
+        showError(e.message || String(e.error || 'unknown'), e.filename, e.lineno, e.error);
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e.reason;
+        var msg = 'Unhandled promise rejection: ' + (r && r.message ? r.message : String(r));
+        showError(msg, '', 0, r);
+      });
+    })();
   </script>
 
   <style>
@@ -56,6 +101,17 @@
       --theme-accent-rgb: 29, 185, 84;
       --theme-accent-fg: #08130c;
       --theme-accent-dim: #14823c;
+      /* Appearance defaults. The media widget does not expose iCUE
+         Appearance controls; these variables are kept as internal styling
+         tokens. */
+      --text-color: #ffffff;
+      --text-rgb: 255, 255, 255;
+      --bg-color: #0a0a0c;
+      --bg-rgb: 10, 10, 12;
+      --bg-opacity: 1;
+      --art-bg-opacity: 0.95;
+      --settings-bg-alpha: 0.85;
+      --reflection-bg-alpha: 0.35;
     }
     .theme-rainbow {
       /* Rainbow palette cycles, so we pick a single accent that doesn't
@@ -97,8 +153,14 @@
       padding: 0;
       width: 100%;
       height: 100%;
-      background: #0a0a0c;
-      color: #fff;
+      /* Transparent so the .widget-bg layer (which respects iCUE's
+         Widget Transparency slider via --bg-opacity) can actually
+         reveal whatever's behind the widget when dialed down. If body
+         keeps an opaque backdrop, --bg-opacity has no visible effect
+         because the opaque body sits behind .widget-bg in the stack
+         and "wins" at any opacity less than 1. */
+      background: transparent;
+      color: var(--text-color, #ffffff);
       overflow: hidden;
       font-family: system-ui, -apple-system, sans-serif;
       -webkit-font-smoothing: antialiased;
@@ -125,6 +187,25 @@
       overflow: hidden;         /* clip the bg blur halo to the cell */
     }
 
+    /* iCUE Widget Background layer. Sits at z-index -2 so it's behind
+       .art-bg (which is at -1) — the album-art bg shows ON TOP of this
+       solid color, dimmed by its own filter chain. When the user drops
+       Widget Transparency to expose the desktop, the album-art bg fades
+       proportionally too (it's a sibling using the SAME opacity logic
+       below, not a stack-on-stack — see .art-bg's transition above).
+
+       Color comes from iCUE's "Widget Background" picker via --bg-color;
+       opacity from "Widget Transparency" via --bg-opacity (where 1 means
+       fully opaque, matching the kit convention). */
+    .widget-bg {
+      position: absolute;
+      inset: 0;
+      background-color: rgba(var(--bg-rgb, 10, 10, 12), var(--bg-opacity, 1));
+      pointer-events: none;
+      z-index: -2;
+      transition: opacity 200ms ease, background-color 200ms ease;
+    }
+
     /* FLICKER TEST: re-introducing the album-art bg layer the way it
        was in phase 8 — heavy filter chain (blur + brightness + saturate)
        on an <img> whose src mirrors the foreground album art. If the
@@ -146,7 +227,7 @@
       opacity: 0;
       transition: opacity 350ms ease;
     }
-    .art-bg.show { opacity: 0.95; }
+    .art-bg.show { opacity: var(--art-bg-opacity, 0.95); }
     .root.size-wide {
       flex-direction: row;
       justify-content: flex-start;
@@ -317,7 +398,7 @@
       border-radius: 50%;
       border: none;
       background: #1c1c22;
-      color: #fff;
+      color: var(--text-color, #ffffff);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -439,7 +520,7 @@
       border: 1px solid rgba(255, 255, 255, 0.10);
       border-radius: 999px;
       background: rgba(0, 0, 0, 0.55);
-      color: rgba(255, 255, 255, 0.78);
+      color: rgba(var(--text-rgb, 255, 255, 255), 0.78);
       font-size: 14px;
       font-weight: 600;
       cursor: pointer;
@@ -537,7 +618,7 @@
       padding: 8px 4px;
       border: 1px solid var(--theme-accent);
       background: transparent;
-      color: rgba(255, 255, 255, 0.78);
+      color: rgba(var(--text-rgb, 255, 255, 255), 0.78);
       cursor: pointer;
       border-radius: 6px;
       font-size: 15px;
@@ -651,7 +732,7 @@
     .root.settings-mode .upnext-chip,
     .root.settings-mode .queue-btn:not(.settings-btn) { display: none; }
     .root.settings-mode .list-view {
-      background: rgba(0, 0, 0, 0.85);
+      background: rgba(var(--bg-rgb, 10, 10, 12), var(--settings-bg-alpha, 0.85));
       border-radius: 0 0 10px 10px;
       margin-top: -10px;
       padding: 20px 12px 10px;
@@ -716,6 +797,7 @@
       inset: 0;
       width: 100%;
       height: 100%;
+      --eq-reflection-y: 50%;
       display: none;
       pointer-events: none;
       overflow: hidden;
@@ -730,7 +812,15 @@
       display: block;
       z-index: 0;
       opacity: 1;
-      background: #0a0a0c;
+      background: transparent;
+    }
+    .eq-visualizer.show-bg.eq-mode-bars,
+    .eq-visualizer.show-full.eq-mode-bars {
+      background: linear-gradient(to bottom,
+        #000000 0,
+        #000000 var(--eq-reflection-y),
+        #0a0a0c var(--eq-reflection-y),
+        #0a0a0c 100%);
     }
     .eq-visualizer:not(.eq-mode-bars) .eq-slot { display: none !important; }
     .eq-slot {
@@ -899,7 +989,7 @@
     .lyrics .line {
       padding: 4px 8px;
       opacity: 0.30;
-      color: #fff;
+      color: var(--text-color, #ffffff);
       font-weight: 500;
       text-align: center;       /* always centered — see UX note in commit history */
       letter-spacing: 0;
@@ -981,7 +1071,7 @@
       border-radius: 999px;
       border: none;
       background: #1c1c22;
-      color: #fff;
+      color: var(--text-color, #ffffff);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -994,6 +1084,7 @@
     .t-btn:hover { background: #2a2a32; }
     .t-btn:active { background: #2a2a32; }
     .t-btn:disabled { opacity: 0.3; cursor: default; }
+    .t-btn.hidden { display: none; }
     .t-btn svg {
       width: 30%;
       max-width: 24px;
@@ -1042,6 +1133,12 @@
 </head>
 <body>
   <main class="root size-vertical" id="root">
+    <!-- iCUE-themable solid background. Driven by the Screens Personalization
+         "Widget Background" (color) + "Widget Transparency" (opacity) values
+         pushed through the backgroundColor / transparency iCUE properties.
+         Renders behind the album-art bg layer below — both fade together
+         when the user dials transparency down. -->
+    <div class="widget-bg" id="widgetBg" aria-hidden="true"></div>
     <!-- crossorigin: required so canvas getImageData on the foreground art
          doesn't taint and we can extract the dominant color for the
          equalizer's two-tone gradient. The host's CORS policy is wide
@@ -1067,7 +1164,7 @@
         </div>
         <div class="header-right">
           <div class="upnext-chip empty" id="upnext"><span class="label">Up next</span><span id="upnextText"></span></div>
-          <button class="queue-btn" id="queueBtn" type="button" aria-label="Show queue" title="Show queue">
+          <button class="queue-btn hidden" id="queueBtn" type="button" aria-label="Show queue" title="Show queue">
             <!-- Spotify-style queue glyph: three horizontal bars (top two
                  full width, bottom shorter) + a play triangle to the right
                  of the bottom bar. Reads instantly as "what's next in
@@ -1121,7 +1218,7 @@
         <!-- Slot 4: Playlists when authed, Connect when not. Same shape so
              the layout doesn't shift when auth flips. id stays stable;
              we swap the inner SVG + aria-label + click handler. -->
-        <button class="t-btn lib" id="libBtn" type="button" aria-label="Connect Spotify">
+        <button class="t-btn lib hidden" id="libBtn" type="button" aria-label="Connect Spotify">
           <svg viewBox="0 0 24 24" aria-hidden="true" id="libIcon">
             <!-- Default = Spotify wordmark icon (Connect) -->
             <circle cx="12" cy="12" r="10"/>
@@ -1229,16 +1326,98 @@
       saveSettings();
     }
 
-    // iCUE lifecycle stub. The icuewidget CLI validator rejects any
-    // widget that doesn't declare `globalThis.icueEvents` with these
-    // two handlers — even when (as here) the widget no longer surfaces
-    // any iCUE-managed properties. Keeping them as no-ops is enough to
-    // pass validation and import cleanly. All settings flow through the
-    // host (loadSettings / saveSettings / updateSetting) instead.
+    // ---- iCUE lifecycle ------------------------------------------------
+    // Kept for WidgetBuilder lifecycle compatibility. Media no longer
+    // declares Appearance properties, so these reads normally fall through
+    // to the CSS defaults.
+    function getIcueProperty(name) {
+      if (typeof window !== 'undefined' && Object.prototype.hasOwnProperty.call(window, name)) {
+        const value = window[name];
+        if (value !== undefined && value !== null && value !== '') return value;
+      }
+      try {
+        const value = Function('return typeof ' + name + ' !== "undefined" ? ' + name + ' : undefined')();
+        if (value !== undefined && value !== null && value !== '') return value;
+      } catch (e) {}
+      return undefined;
+    }
+
+    function applyIcuePersonalization() {
+      // Writes CSS variables on documentElement (= the :root selector) so
+      // the values cascade to .widget-bg the same way the static :root
+      // defaults above do. We deliberately DON'T use rootEl here because
+      // applyIcuePersonalization fires from globalThis.icueEvents on
+      // onICUEInitialized — which can land before the `const rootEl =
+      // document.getElementById('root')` declaration further down in this
+      // module evaluates. Touching rootEl from here would crash with a
+      // temporal-dead-zone ReferenceError on the user's machine (where
+      // iCUE pushes the default property values immediately), leaving the
+      // widget stuck at "Connecting…". documentElement is always reachable.
+      const docRoot = document.documentElement;
+      const hexToRgb = value => {
+        const m = typeof value === 'string'
+          ? value.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
+          : null;
+        if (!m) return null;
+        const hex = m[1].length === 3
+          ? m[1].split('').map(c => c + c).join('')
+          : m[1];
+        return [
+          parseInt(hex.slice(0, 2), 16),
+          parseInt(hex.slice(2, 4), 16),
+          parseInt(hex.slice(4, 6), 16),
+        ];
+      };
+
+      const text = getIcueProperty('textColor');
+      const textRgb = hexToRgb(text);
+      if (textRgb) {
+        docRoot.style.setProperty('--text-color', text);
+        docRoot.style.setProperty('--text-rgb', textRgb.join(', '));
+      }
+
+      const bg = getIcueProperty('backgroundColor');
+      // Defensive: iCUE color properties come in as hex strings (#rrggbb
+      // or #rgb). Anything else (legacy named colors, malformed entries)
+      // we drop on the floor and keep the previous value — better than
+      // breaking the bg layer with an invalid CSS color string.
+      const bgRgb = hexToRgb(bg);
+      if (bgRgb) {
+        docRoot.style.setProperty('--bg-color', bg);
+        docRoot.style.setProperty('--bg-rgb', bgRgb.join(', '));
+      }
+
+      // Transparency 0-100 maps directly to --bg-opacity 0-1, matching the
+      // kit convention (100 = fully opaque). Numeric guard catches the
+      // moment before iCUE first injects the value when it can be a
+      // string or undefined.
+      const t = getIcueProperty('transparency');
+      const n = typeof t === 'number' ? t : Number(t);
+      if (Number.isFinite(n)) {
+        const clamped = Math.max(0, Math.min(100, n));
+        const opacity = clamped / 100;
+        docRoot.style.setProperty('--bg-opacity', String(opacity));
+        docRoot.style.setProperty('--art-bg-opacity', String(opacity * 0.95));
+        docRoot.style.setProperty('--settings-bg-alpha', String(opacity * 0.85));
+        docRoot.style.setProperty('--reflection-bg-alpha', String(opacity * 0.35));
+      }
+    }
+
+    // iCUE lifecycle. The icuewidget CLI validator rejects any widget
+    // that doesn't declare `globalThis.icueEvents` with these two handlers;
+    // both fire applyIcuePersonalization so the widget tracks Personalization
+    // changes live (the panel's color picker / slider trigger onDataUpdated
+    // on commit).
     globalThis.icueEvents = {
-      onICUEInitialized: () => {},
-      onDataUpdated: () => {},
+      onICUEInitialized: () => { applyIcuePersonalization(); },
+      onDataUpdated: () => { applyIcuePersonalization(); },
     };
+
+    // Initial paint before iCUE has fired onICUEInitialized. If iCUE was
+    // already initialized when this script ran (some QtWebEngine builds
+    // race the script tags ahead of the event), pick up any properties
+    // that are already there. The CSS defaults cover us either way.
+    applyIcuePersonalization();
 
     // Live snapshots of each Behavior option. The auto-expand pair is
     // parked here until the listening-mode phase lands — registering them
@@ -1361,7 +1540,7 @@
     let lastFillRatio = -1;
     let lastSourceVisible = null;     // bool: should the source line show?
     let lastSourceAlbum = null;       // string we last wrote to .album
-    let lastLibMode = null;           // 'connect' | 'playlists'
+    let lastLibMode = null;           // 'connect' | 'playlists' | 'back' | 'hidden'
     let pulseTimeout = null;
     let eqLayoutCache = null;
 
@@ -1498,14 +1677,23 @@
     const CONNECT_SVG =
       '<circle cx="12" cy="12" r="10"/>' +
       '<path d="M16.7 16.5c-.2.3-.6.4-.9.2-2.5-1.5-5.6-1.9-9.3-1-.4.1-.7-.2-.8-.5-.1-.4.2-.7.5-.8 4-.9 7.5-.5 10.3 1.2.3.2.4.6.2.9zm1.2-2.7c-.2.4-.7.5-1.1.3-2.8-1.7-7.1-2.2-10.5-1.2-.4.1-.9-.1-1-.6-.1-.4.1-.9.6-1 3.8-1.2 8.5-.6 11.7 1.4.4.2.5.7.3 1.1zm.1-2.8C14.9 9 9.4 8.7 6.2 9.7c-.5.2-1.1-.1-1.2-.6-.2-.5.1-1.1.6-1.2 3.7-1.1 9.7-.9 13.4 1.3.5.3.6.9.4 1.4-.3.4-.9.6-1.4.4z" fill="#0a0a0c"/>';
+    function spotifyUiActive() {
+      return lastIsSpotify;
+    }
+
     function setLibMode() {
       let mode;
-      if (!spotifyAuthed) mode = 'connect';
-      else if (currentView === 'playlists' || currentView === 'audio-source') mode = 'back';
+      if (currentView === 'audio-source') mode = 'back';
+      else if (!spotifyUiActive()) mode = 'hidden';
+      else if (!spotifyAuthed) mode = 'connect';
+      else if (currentView === 'playlists') mode = 'back';
       else mode = 'playlists';
+      libBtn.classList.toggle('hidden', mode === 'hidden');
       if (mode === lastLibMode) return;
       lastLibMode = mode;
-      if (mode === 'back') {
+      if (mode === 'hidden') {
+        libBtn.setAttribute('aria-label', 'Spotify controls unavailable for this media source');
+      } else if (mode === 'back') {
         libIcon.innerHTML = BACK_SVG;
         libIcon.setAttribute('fill', 'none');
         libIcon.setAttribute('stroke', 'currentColor');
@@ -1567,21 +1755,24 @@
     toggleBtn.addEventListener('click', () => postAction('toggle', 'toggle'));
     nextBtn.addEventListener('click', () => postAction('next', 'next'));
     libBtn.addEventListener('click', async () => {
-      if (lastLibMode === 'connect') {
+      if (currentView === 'audio-source') {
+        // Inside the audio-source sub-view -> tap back goes to wherever
+        // the picker was opened from (playlists or settings).
+        setView(audioSourceFrom);
+      } else if (!spotifyUiActive()) {
+        return;
+      } else if (lastLibMode === 'connect') {
         // POST /api/spotify/connect — host opens the user's default browser
         // to the Spotify auth URL via the betterxeneonwidget:// scheme.
         try { await fetch(HOST + '/api/spotify/connect', { method: 'POST' }); }
         catch { /* surfaced by next poll's status */ }
-      } else if (currentView === 'audio-source') {
-        // Inside the audio-source sub-view → tap back goes to wherever
-        // the picker was opened from (playlists or settings).
-        setView(audioSourceFrom);
       } else {
         // Authed and on lyrics/queue/playlists: toggle playlists view.
         setView(currentView === 'playlists' ? 'lyrics' : 'playlists');
       }
     });
     queueBtn.addEventListener('click', () => {
+      if (!spotifyUiActive()) return;
       setView(currentView === 'queue' ? 'lyrics' : 'queue');
     });
     settingsBtn.addEventListener('click', () => {
@@ -1590,7 +1781,7 @@
 
     // --- Up-next renderer + Spotify queue/playlists pollers --------------
     function setUpnext(text) {
-      const v = text || '';
+      const v = spotifyAuthed && spotifyUiActive() ? (text || '') : '';
       if (v === lastUpnextText) return;
       lastUpnextText = v;
       if (v) {
@@ -1608,7 +1799,7 @@
     }
 
     async function pollSpotifyQueue(forceRefresh = false) {
-      if (!spotifyAuthed) {
+      if (!spotifyAuthed || !spotifyUiActive()) {
         setUpnext('');
         spotifyQueue = [];
         // The queue is what we fall back to when lyrics are absent, so a
@@ -1649,7 +1840,7 @@
     }
 
     async function pollSpotifyPlaylists() {
-      if (!spotifyAuthed) {
+      if (!spotifyAuthed || !spotifyUiActive()) {
         spotifyPlaylists = [];
         if (currentView === 'playlists') applyView();
         return;
@@ -1772,12 +1963,19 @@
       // user is on queue/playlists/audio-source/settings, or the default
       // 'lyrics' state has fallen back to queue because there are no
       // lyrics to show.
+      if (currentView === 'settings' || currentView === 'audio-source') return true;
+      if (!spotifyUiActive()) return false;
       if (currentView !== 'lyrics') return true;
       return parsedLyrics.length === 0 || !optShowLyrics;
     }
 
     function setView(view) {
       const prev = currentView;
+      if (!spotifyUiActive() && (view === 'queue' || view === 'playlists')) {
+        view = 'lyrics';
+      } else if (!spotifyAuthed && view === 'playlists') {
+        view = 'lyrics';
+      }
       currentView = view;
       // Prime the relevant data so the list isn't blank on first open.
       if (view === 'playlists') pollSpotifyPlaylists();
@@ -2487,6 +2685,7 @@
           numBars,
           reflectFactor: 1.0,
         };
+        eqVisualizer.style.setProperty('--eq-reflection-y', drawBaseY.toFixed(2) + 'px');
 
         for (let i = 0; i < EQ_BAR_COUNT; i++) {
           const parts = eqBars[i];
@@ -2736,6 +2935,9 @@
     }, 1000);
 
     function applyView() {
+      if (!spotifyUiActive() && (currentView === 'queue' || currentView === 'playlists')) {
+        currentView = 'lyrics';
+      }
       const hasLyrics = parsedLyrics.length > 0 && optShowLyrics;
       // 'lyrics' is the implicit default — but if we don't have any to
       // show, the list-view takes over and renders the queue. Tracking
@@ -2743,7 +2945,8 @@
       // track change can reset us back to "show lyrics if you have
       // them" without forgetting that the user previously had us on
       // the queue (we just re-evaluate every track).
-      const showList = currentView !== 'lyrics' || !hasLyrics;
+      const showList = currentView === 'settings' || currentView === 'audio-source' ||
+        (spotifyUiActive() && (currentView !== 'lyrics' || !hasLyrics));
 
       lyricsEl.classList.toggle('hidden', showList);
       listViewEl.classList.toggle('hidden', !showList);
@@ -2762,7 +2965,7 @@
       // When the user explicitly opens queue, it stays visible as the
       // toggle back to lyrics.
       const queueIsImplicitFallback = showList && currentView === 'lyrics';
-      queueBtn.classList.toggle('hidden', queueIsImplicitFallback);
+      queueBtn.classList.toggle('hidden', !spotifyUiActive() || queueIsImplicitFallback);
       // Active class mirrors the user's explicit choice, not the
       // effective view — a lyrics-less track's auto-fallback shouldn't
       // light the toggle up.
@@ -3466,7 +3669,21 @@
         const fetchEnd = performance.now();
 
         const wasAuthed = spotifyAuthed;
+        const wasSpotifySource = lastIsSpotify;
         spotifyAuthed = !!ss.connected;
+        lastIsSpotify = !!np.isSpotify && !!np.hasSession;
+        let spotifySourceChanged = wasSpotifySource !== lastIsSpotify;
+        if (!lastIsSpotify) {
+          if (currentView === 'queue' || currentView === 'playlists') {
+            currentView = 'lyrics';
+            spotifySourceChanged = true;
+          }
+          if (spotifyQueue.length > 0) {
+            spotifyQueue = [];
+            spotifySourceChanged = true;
+          }
+          setUpnext('');
+        }
         setLibMode();
         // (No /api/spotify/playback poll here.) SMTC already gives us
         // title/artist/album/position/duration/state for the local audio
@@ -3478,8 +3695,8 @@
 
         // Auth flipped — kick the slow Spotify pollers (queue + playlists)
         // immediately on first connect, and stop them on disconnect.
-        if (spotifyAuthed && !wasAuthed) {
-          pollSpotifyQueue();
+        if (spotifyAuthed && lastIsSpotify && (!wasAuthed || !wasSpotifySource)) {
+          pollSpotifyQueue(true);
           pollSpotifyPlaylists();
         } else if (!spotifyAuthed && wasAuthed) {
           spotifyQueue = [];
@@ -3490,13 +3707,14 @@
           // nothing to show without a token.
           if (currentView === 'playlists') currentView = 'lyrics';
           applyView();
+        } else if (spotifySourceChanged) {
+          applyView();
         }
 
         const title = np.hasSession ? (np.title || 'Unknown title') : 'Nothing playing';
         const artist = np.hasSession ? (np.artist || '') : '';
         if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
         if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
-        lastIsSpotify = !!np.isSpotify && !!np.hasSession;
         // Source line: visible only when Spotify is the SMTC source.
         // (Other sources just don't show this line — title/artist alone is
         // enough for non-Spotify SMTC playback.)

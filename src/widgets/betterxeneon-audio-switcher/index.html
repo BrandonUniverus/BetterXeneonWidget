@@ -14,30 +14,26 @@
           data-max="5000"
           data-step="100">
 
-    <meta name="x-icue-property" content="useSystemAccent"
-          data-label="tr('Use Windows Accent Color')"
-          data-type="switch"
-          data-default="true">
-
     <meta name="x-icue-property" content="textColor"
           data-label="tr('Text Color')"
           data-type="color"
           data-default="'#ffffff'">
-
-    <meta name="x-icue-property" content="accentColor"
-          data-label="tr('Custom Accent Color')"
-          data-type="color"
-          data-default="'#0078d4'">
 
     <meta name="x-icue-property" content="backgroundColor"
           data-label="tr('Background Color')"
           data-type="color"
           data-default="'#0a0a0c'">
 
+    <!-- "Transparency" follows the iCUE WidgetBuilder kit convention:
+         100 = fully opaque, 0 = fully transparent, default 100. iCUE's
+         Screens Personalization "Widget Transparency" slider pushes its
+         value into this property using the same semantic, so the slider
+         direction matches what the user sees in the Personalization panel
+         (right = more opaque). -->
     <meta name="x-icue-property" content="transparency"
           data-label="tr('Background Transparency')"
           data-type="slider"
-          data-default="0"
+          data-default="100"
           data-min="0"
           data-max="100"
           data-step="1">
@@ -45,8 +41,55 @@
     <script id="x-icue-groups" type="application/json">
       [
         { "title": "tr('Behavior')", "properties": ["pollIntervalMs"] },
-        { "title": "tr('Appearance')", "properties": ["useSystemAccent", "textColor", "accentColor", "backgroundColor", "transparency"] }
+        { "title": "tr('Appearance')", "properties": ["textColor", "backgroundColor", "transparency"] }
       ]
+    </script>
+
+    <!-- Crash-visibility overlay. Registers global error / rejection
+         handlers BEFORE the Svelte module evaluates so any TDZ
+         ReferenceError, syntax error, or unhandled promise rejection
+         during startup surfaces a readable error pane instead of
+         leaving the widget stuck at "Connecting…". See the matching
+         block in media-v2/index.html — kept identical so debugging is
+         consistent across widgets. Self-contained: no external CSS or
+         module deps that could themselves crash. -->
+    <script>
+      (function () {
+        function showError(message, source, lineno, error) {
+          try {
+            var overlay = document.getElementById('__bxw_error_overlay');
+            if (!overlay) {
+              overlay = document.createElement('div');
+              overlay.id = '__bxw_error_overlay';
+              overlay.style.cssText =
+                'position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
+                'background:rgba(90,0,16,0.94);color:#fff;' +
+                'font:12px/1.45 ui-monospace,Consolas,monospace;' +
+                'padding:10px 14px;max-height:60vh;overflow-y:auto;' +
+                'white-space:pre-wrap;word-break:break-word;' +
+                'box-shadow:0 4px 14px rgba(0,0,0,0.5);';
+              (document.body || document.documentElement).appendChild(overlay);
+            }
+            var stack = error && error.stack ? '\n' + error.stack : '';
+            var where = source ? ' (' + String(source).split(/[\/\\]/).pop() + ':' + lineno + ')' : '';
+            var entry = document.createElement('div');
+            entry.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.15);padding:4px 0;';
+            entry.textContent = 'Widget error: ' + message + where + stack;
+            overlay.insertBefore(entry, overlay.firstChild);
+            while (overlay.childElementCount > 4) overlay.removeChild(overlay.lastChild);
+          } catch (e) {
+            try { console.error('error overlay failed:', e); } catch (_) {}
+          }
+        }
+        window.addEventListener('error', function (e) {
+          showError(e.message || String(e.error || 'unknown'), e.filename, e.lineno, e.error);
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e.reason;
+          var msg = 'Unhandled promise rejection: ' + (r && r.message ? r.message : String(r));
+          showError(msg, '', 0, r);
+        });
+      })();
     </script>
   </head>
   <body>
