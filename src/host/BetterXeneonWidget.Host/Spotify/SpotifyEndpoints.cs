@@ -3,6 +3,7 @@
 // references would fail to resolve. Importing via alias dodges that without
 // having to global:: every type. Same pattern SpotifyService.cs uses.
 using SysJson = global::System.Text.Json;
+using BetterXeneonWidget.Host.Media;
 
 namespace BetterXeneonWidget.Host.Spotify;
 
@@ -46,7 +47,9 @@ public static class SpotifyEndpoints
             return Results.NoContent();
         });
 
-        group.MapGet("/queue", async (SpotifyService svc) => await svc.GetQueueAsync());
+        group.MapGet("/queue", async (HttpRequest req, SpotifyService svc) =>
+            await svc.GetQueueAsync(
+                string.Equals(req.Query["force"].ToString(), "true", global::System.StringComparison.OrdinalIgnoreCase)));
         group.MapGet("/recently-played", async (SpotifyService svc) => await svc.GetRecentlyPlayedAsync());
         group.MapGet("/playlists", async (SpotifyService svc) => await svc.GetPlaylistsAsync());
 
@@ -96,18 +99,34 @@ public static class SpotifyEndpoints
             await svc.PlaybackResumeAsync()   ? Results.NoContent() : Results.UnprocessableEntity());
         group.MapPost("/playback/pause",    async (SpotifyService svc) =>
             await svc.PlaybackPauseAsync()    ? Results.NoContent() : Results.UnprocessableEntity());
-        group.MapPost("/playback/next",     async (SpotifyService svc) =>
-            await svc.PlaybackNextAsync()     ? Results.NoContent() : Results.UnprocessableEntity());
-        group.MapPost("/playback/previous", async (SpotifyService svc) =>
-            await svc.PlaybackPreviousAsync() ? Results.NoContent() : Results.UnprocessableEntity());
+        group.MapPost("/playback/next", async (SpotifyService svc, MediaService media) =>
+        {
+            var ok = await svc.PlaybackNextAsync();
+            if (ok) media.InvalidateArtCache();
+            return ok ? Results.NoContent() : Results.UnprocessableEntity();
+        });
+        group.MapPost("/playback/previous", async (SpotifyService svc, MediaService media) =>
+        {
+            var ok = await svc.PlaybackPreviousAsync();
+            if (ok) media.InvalidateArtCache();
+            return ok ? Results.NoContent() : Results.UnprocessableEntity();
+        });
 
-        group.MapPost("/play/track/{id}", async (string id, SpotifyService svc) =>
-            await svc.PlayTrackAsync(id) ? Results.NoContent() : Results.UnprocessableEntity(
-                new { error = "Spotify rejected playback. Check that Spotify is open on a device, your account is Premium, and you've reauthorized after the recent scope addition." }));
+        group.MapPost("/play/track/{id}", async (string id, SpotifyService svc, MediaService media) =>
+        {
+            var ok = await svc.PlayTrackAsync(id);
+            if (ok) media.InvalidateArtCache();
+            return ok ? Results.NoContent() : Results.UnprocessableEntity(
+                new { error = "Spotify rejected playback. Check that Spotify is open on a device, your account is Premium, and you've reauthorized after the recent scope addition." });
+        });
 
-        group.MapPost("/play/playlist/{id}", async (string id, SpotifyService svc) =>
-            await svc.PlayPlaylistAsync(id) ? Results.NoContent() : Results.UnprocessableEntity(
-                new { error = "Spotify rejected playback. Check that Spotify is open on a device, your account is Premium, and you've reauthorized after the recent scope addition." }));
+        group.MapPost("/play/playlist/{id}", async (string id, SpotifyService svc, MediaService media) =>
+        {
+            var ok = await svc.PlayPlaylistAsync(id);
+            if (ok) media.InvalidateArtCache();
+            return ok ? Results.NoContent() : Results.UnprocessableEntity(
+                new { error = "Spotify rejected playback. Check that Spotify is open on a device, your account is Premium, and you've reauthorized after the recent scope addition." });
+        });
 
         return app;
     }

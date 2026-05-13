@@ -282,7 +282,12 @@ public sealed class SpotifyService
                 ApplyPlaybackBackoff(res);
                 return false;
             }
-            return res.IsSuccessStatusCode;
+            var ok = res.IsSuccessStatusCode;
+            if (ok && (action == "next" || action == "previous"))
+            {
+                InvalidateQueueCache();
+            }
+            return ok;
         }
         catch
         {
@@ -370,18 +375,18 @@ public sealed class SpotifyService
         }
     }
 
-    public async Task<IReadOnlyList<SpotifyQueueItemDto>> GetQueueAsync()
+    public async Task<IReadOnlyList<SpotifyQueueItemDto>> GetQueueAsync(bool forceRefresh = false)
     {
         var now = DateTimeOffset.UtcNow;
         if (now < _playbackBlockedUntil) return _cachedQueue;
-        if (now - _cachedQueueAt < QueueCacheLifetime) return _cachedQueue;
+        if (!forceRefresh && now - _cachedQueueAt < QueueCacheLifetime) return _cachedQueue;
 
         await _queueLock.WaitAsync();
         try
         {
             now = DateTimeOffset.UtcNow;
             if (now < _playbackBlockedUntil) return _cachedQueue;
-            if (now - _cachedQueueAt < QueueCacheLifetime) return _cachedQueue;
+            if (!forceRefresh && now - _cachedQueueAt < QueueCacheLifetime) return _cachedQueue;
 
             var token = await GetValidAccessTokenAsync();
             if (token is null) return _cachedQueue;
@@ -504,17 +509,28 @@ public sealed class SpotifyService
             /* fall through to no-context play */
         }
 
-        string body = !string.IsNullOrEmpty(contextUri)
-            ? JsonSerializer.Serialize(new
-              {
-                  context_uri = contextUri,
-                  offset = new { uri = $"spotify:track:{trackId}" },
-              })
-            : JsonSerializer.Serialize(new
-              {
-                  uris = new[] { $"spotify:track:{trackId}" },
-              });
-        return await PlayCoreAsync(body);
+        var trackUri = $"spotify:track:{trackId}";
+        if (!string.IsNullOrEmpty(contextUri))
+        {
+            var contextBody = JsonSerializer.Serialize(new
+            {
+                context_uri = contextUri,
+                offset = new { uri = trackUri },
+            });
+            if (await PlayCoreAsync(contextBody))
+            {
+                InvalidateQueueCache();
+                return true;
+            }
+        }
+
+        var singleTrackBody = JsonSerializer.Serialize(new
+        {
+            uris = new[] { trackUri },
+        });
+        var ok = await PlayCoreAsync(singleTrackBody);
+        if (ok) InvalidateQueueCache();
+        return ok;
     }
 
     /// <summary>
@@ -525,7 +541,14 @@ public sealed class SpotifyService
     {
         if (string.IsNullOrWhiteSpace(playlistId)) return false;
         var body = JsonSerializer.Serialize(new { context_uri = $"spotify:playlist:{playlistId}" });
-        return await PlayCoreAsync(body);
+        var ok = await PlayCoreAsync(body);
+        if (ok) InvalidateQueueCache();
+        return ok;
+    }
+
+    private void InvalidateQueueCache()
+    {
+        _cachedQueueAt = DateTimeOffset.MinValue;
     }
 
     private async Task<bool> PlayCoreAsync(string jsonBody)
@@ -571,6 +594,7 @@ public sealed class SpotifyService
     private static readonly TimeSpan PlaylistsCacheLifetime = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan QueueCacheLifetime = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan DefaultRateLimitBackoff = TimeSpan.FromMinutes(2);
+    private const int PlaylistsCacheVersion = 2;
     private readonly SemaphoreSlim _playlistsLock = new(1, 1);
     private readonly SemaphoreSlim _queueLock = new(1, 1);
     private IReadOnlyList<SpotifyQueueItemDto> _cachedQueue = Array.Empty<SpotifyQueueItemDto>();
@@ -603,7 +627,9 @@ public sealed class SpotifyService
             if (snap.Items is not null)
             {
                 _cachedPlaylists = snap.Items;
-                _cachedPlaylistsAt = snap.SavedAt;
+                _cachedPlaylistsAt = snap.Version == PlaylistsCacheVersion
+                    ? snap.SavedAt
+                    : DateTimeOffset.MinValue;
             }
             // Restore the rate-limit window. Without this, restarting the
             // host immediately after Spotify ban-hammered us would re-fire
@@ -623,6 +649,7 @@ public sealed class SpotifyService
             Directory.CreateDirectory(Path.GetDirectoryName(PlaylistsCachePath)!);
             var snap = new PlaylistsCacheSnapshot
             {
+                Version = PlaylistsCacheVersion,
                 Items = _cachedPlaylists,
                 SavedAt = _cachedPlaylistsAt,
                 BlockedUntil = _playlistsBlockedUntil,
@@ -634,6 +661,7 @@ public sealed class SpotifyService
 
     private sealed class PlaylistsCacheSnapshot
     {
+        public int Version { get; set; }
         public List<SpotifyPlaylistDto> Items { get; set; } = new();
         public DateTimeOffset SavedAt { get; set; }
         public DateTimeOffset BlockedUntil { get; set; }
@@ -722,83 +750,94 @@ public sealed class SpotifyService
             var token = await GetValidAccessTokenAsync();
             if (token is null) return _cachedPlaylists;
 
-            using var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/me/playlists?limit=20");
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            using var res = await _http.SendAsync(req);
-
-            if (res.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
+            var result = new List<SpotifyPlaylistDto>();
+            for (var offset = 0; ; offset += 50)
             {
-                // Spotify sends Retry-After (seconds, sometimes hours when
-                // they really want us to back off). Honor it + 1 min pad so
-                // we don't fire the call right as the window closes.
-                var retry = GetRetryAfterDelay(res);
-                _playlistsBlockedUntil = DateTimeOffset.UtcNow + retry + TimeSpan.FromMinutes(1);
-                SaveRateLimitCache();
-                SavePlaylistsCache(); // persist the cool-down window too
-                return _cachedPlaylists;
-            }
+                using var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/me/playlists?limit=50&offset={offset}");
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                using var res = await _http.SendAsync(req);
 
-            // Any other non-success: short backoff so we don't hammer.
-            if (!res.IsSuccessStatusCode)
-            {
-                _playlistsBlockedUntil = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
-                SaveRateLimitCache();
-                return _cachedPlaylists;
-            }
-
-            await using var stream = await res.Content.ReadAsStreamAsync();
-            using var doc = await JsonDocument.ParseAsync(stream);
-            if (!doc.RootElement.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
-                return _cachedPlaylists;
-
-            var result = new List<SpotifyPlaylistDto>(itemsEl.GetArrayLength());
-            foreach (var item in itemsEl.EnumerateArray())
-            {
-                // Spotify can include null entries for deleted/unavailable
-                // playlists. Skip cleanly so a single bad entry doesn't drop
-                // the whole list to empty.
-                if (item.ValueKind != JsonValueKind.Object) continue;
-
-                try
+                if (res.StatusCode == SysNet.HttpStatusCode.TooManyRequests)
                 {
-                var id = item.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? string.Empty : string.Empty;
-                var name = item.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? string.Empty : string.Empty;
-
-                // Spotify renamed `tracks` → `items` for the per-playlist
-                // count reference at some point. Try both for robustness.
-                int trackCount = 0;
-                JsonElement countObj = default;
-                bool found = (item.TryGetProperty("items", out countObj)
-                              && countObj.ValueKind == JsonValueKind.Object)
-                          || (item.TryGetProperty("tracks", out countObj)
-                              && countObj.ValueKind == JsonValueKind.Object);
-                if (found
-                    && countObj.TryGetProperty("total", out var totalEl)
-                    && totalEl.TryGetInt32(out var t))
-                {
-                    trackCount = t;
+                    // Spotify sends Retry-After (seconds, sometimes hours when
+                    // they really want us to back off). Honor it + 1 min pad so
+                    // we don't fire the call right as the window closes.
+                    var retry = GetRetryAfterDelay(res);
+                    _playlistsBlockedUntil = DateTimeOffset.UtcNow + retry + TimeSpan.FromMinutes(1);
+                    SaveRateLimitCache();
+                    SavePlaylistsCache(); // persist the cool-down window too
+                    return _cachedPlaylists;
                 }
 
-                string? imageUrl = null;
-                if (item.TryGetProperty("images", out var imgsEl) && imgsEl.ValueKind == JsonValueKind.Array)
+                // Any other non-success: short backoff so we don't hammer.
+                if (!res.IsSuccessStatusCode)
                 {
-                    var images = new List<SpotifyImage>();
-                    foreach (var img in imgsEl.EnumerateArray())
+                    _playlistsBlockedUntil = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+                    SaveRateLimitCache();
+                    return _cachedPlaylists;
+                }
+
+                await using var stream = await res.Content.ReadAsStreamAsync();
+                using var doc = await JsonDocument.ParseAsync(stream);
+                if (!doc.RootElement.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
+                    return _cachedPlaylists;
+
+                foreach (var item in itemsEl.EnumerateArray())
+                {
+                    // Spotify can include null entries for deleted/unavailable
+                    // playlists. Skip cleanly so a single bad entry doesn't drop
+                    // the whole list to empty.
+                    if (item.ValueKind != JsonValueKind.Object) continue;
+
+                    try
                     {
-                        var url = img.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "";
-                        int? w = img.TryGetProperty("width", out var wEl) && wEl.ValueKind == JsonValueKind.Number ? wEl.GetInt32() : null;
-                        int? h = img.TryGetProperty("height", out var hEl) && hEl.ValueKind == JsonValueKind.Number ? hEl.GetInt32() : null;
-                        if (!string.IsNullOrEmpty(url)) images.Add(new SpotifyImage(url, w, h));
+                        var id = item.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? string.Empty : string.Empty;
+                        var name = item.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? string.Empty : string.Empty;
+
+                        // Spotify renamed `tracks` -> `items` for the per-playlist
+                        // count reference at some point. Try both for robustness.
+                        int trackCount = 0;
+                        JsonElement countObj = default;
+                        bool found = (item.TryGetProperty("items", out countObj)
+                                      && countObj.ValueKind == JsonValueKind.Object)
+                                  || (item.TryGetProperty("tracks", out countObj)
+                                      && countObj.ValueKind == JsonValueKind.Object);
+                        if (found
+                            && countObj.TryGetProperty("total", out var totalEl)
+                            && totalEl.TryGetInt32(out var t))
+                        {
+                            trackCount = t;
+                        }
+
+                        string? imageUrl = null;
+                        if (item.TryGetProperty("images", out var imgsEl) && imgsEl.ValueKind == JsonValueKind.Array)
+                        {
+                            var images = new List<SpotifyImage>();
+                            foreach (var img in imgsEl.EnumerateArray())
+                            {
+                                var url = img.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "";
+                                int? w = img.TryGetProperty("width", out var wEl) && wEl.ValueKind == JsonValueKind.Number ? wEl.GetInt32() : null;
+                                int? h = img.TryGetProperty("height", out var hEl) && hEl.ValueKind == JsonValueKind.Number ? hEl.GetInt32() : null;
+                                if (!string.IsNullOrEmpty(url)) images.Add(new SpotifyImage(url, w, h));
+                            }
+                            imageUrl = PickImage(images);
+                        }
+
+                        result.Add(new SpotifyPlaylistDto(id, name, imageUrl, trackCount));
                     }
-                    imageUrl = PickImage(images);
+                    catch
+                    {
+                        // Single bad entry — skip and keep going.
+                    }
                 }
 
-                result.Add(new SpotifyPlaylistDto(id, name, imageUrl, trackCount));
-                }
-                catch
-                {
-                    // Single bad entry — skip and keep going.
-                }
+                var total = doc.RootElement.TryGetProperty("total", out var rootTotalEl) && rootTotalEl.TryGetInt32(out var totalValue)
+                    ? totalValue
+                    : result.Count;
+                var next = doc.RootElement.TryGetProperty("next", out var nextEl) && nextEl.ValueKind == JsonValueKind.String
+                    ? nextEl.GetString()
+                    : null;
+                if (string.IsNullOrEmpty(next) || result.Count >= total) break;
             }
 
             _cachedPlaylists = result;

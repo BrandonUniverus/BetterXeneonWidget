@@ -23,6 +23,21 @@ export interface AppStateValue {
   // Has the user (or a previous first-run) ever set pins? When false, the
   // first poll cycle auto-pins the system default.
   configInitialized: boolean;
+  /**
+   * Per-session timestamp (Date.now()) of the last poll where the session's
+   * Peak crossed an audibility threshold. Used to sort Apps by most recent
+   * sound and to dim rows that haven't produced sound recently. Updated in
+   * polling.ts; not persisted across reloads.
+   */
+  lastSoundAtBySessionId: Record<string, number>;
+  /**
+   * Latest snapshot of the shared widget-settings blob (the same JSON the
+   * media widget reads/writes). Polled periodically so audio-switcher can
+   * mirror the media widget's chosen theme accent. Only a subset of keys
+   * are read here — `theme: 0..5` drives the accent — everything else is
+   * ignored. Null until the first successful fetch.
+   */
+  widgetSettings: Record<string, unknown> | null;
 }
 
 const initial: AppStateValue = {
@@ -38,6 +53,8 @@ const initial: AppStateValue = {
   pendingDefaultId: null,
   configLoaded: false,
   configInitialized: false,
+  lastSoundAtBySessionId: {},
+  widgetSettings: null,
 };
 
 export const appStore = writable<AppStateValue>(initial);

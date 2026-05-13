@@ -275,7 +275,16 @@
       gap: 8px;
       max-width: 50%;
     }
-    .root.size-vertical .header-right { display: none; }
+    .root.size-vertical .header-right {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      display: flex;
+      max-width: none;
+      z-index: 2;
+    }
+    .root.size-vertical .upnext-chip,
+    .root.size-vertical .queue-btn:not(.settings-btn) { display: none; }
     .upnext-chip {
       font-size: 11px;
       letter-spacing: 0.02em;
@@ -643,8 +652,9 @@
     .root.settings-mode .queue-btn:not(.settings-btn) { display: none; }
     .root.settings-mode .list-view {
       background: rgba(0, 0, 0, 0.85);
-      border-radius: 10px;
-      padding: 10px 12px;
+      border-radius: 0 0 10px 10px;
+      margin-top: -10px;
+      padding: 20px 12px 10px;
     }
 
     /* -- Listening (screensaver) mode --------------------------------------
@@ -751,6 +761,35 @@
       height: 2px;
       transition: transform 95ms linear, background 120ms linear, opacity 120ms linear;
     }
+    .eq-radial {
+      position: absolute;
+      inset: 0;
+      display: none;
+      overflow: hidden;
+      pointer-events: none;
+      contain: layout paint style;
+    }
+    .eq-visualizer.eq-mode-radial .eq-radial { display: block; }
+    .eq-radial-spoke,
+    .eq-radial-core {
+      position: absolute;
+      left: 0;
+      top: 0;
+      pointer-events: none;
+      will-change: transform, opacity;
+    }
+    .eq-radial-spoke {
+      height: 3px;
+      border-radius: 999px;
+      transform-origin: left center;
+      transition: background 120ms linear, opacity 120ms linear;
+    }
+    .eq-radial-core {
+      border-radius: 50%;
+      box-sizing: border-box;
+      transform: translate(-50%, -50%);
+      transition: background 120ms linear, border-color 120ms linear, opacity 120ms linear;
+    }
     .eq-svg {
       position: absolute;
       inset: 0;
@@ -761,11 +800,8 @@
       pointer-events: none;
       contain: layout paint style;
     }
-    .eq-visualizer.eq-mode-radial .eq-svg,
     .eq-visualizer.eq-mode-tunnel .eq-svg { display: block; }
-    .eq-svg line,
-    .eq-svg polygon,
-    .eq-svg circle {
+    .eq-svg polygon {
       vector-effect: non-scaling-stroke;
       will-change: transform, opacity;
     }
@@ -1229,6 +1265,7 @@
     let queueTimer = null;
     let playlistsTimer = null;
     let spotifyQueueInFlight = false;
+    let spotifyQueueForcePending = false;
     let spotifyPlaylistsInFlight = false;
 
     // View state for the content area: 'lyrics' (default — lyrics if
@@ -1334,6 +1371,7 @@
     let isPlaying = false;
     let lastTrackKey = '';
     let spotifyAuthed = false;
+    let lastIsSpotify = false;
 
     let parsedLyrics = [];
     let lyricLineEls = [];
@@ -1501,17 +1539,33 @@
       pulseTimeout = setTimeout(() => pulseEl.classList.remove('live'), 250);
     }
 
-    async function postAction(path, key) {
+    async function postAction(kind, key) {
       if (inFlight[key]) return;
       inFlight[key] = true;
-      try { await fetch(HOST + path, { method: 'POST' }); }
+      try {
+        let path = '/api/media/' + kind;
+        if (spotifyAuthed && lastIsSpotify) {
+          if (kind === 'toggle') {
+            path = lastIsPlaying ? '/api/spotify/playback/pause' : '/api/spotify/playback/play';
+          } else if (kind === 'next') {
+            path = '/api/spotify/playback/next';
+          } else if (kind === 'previous') {
+            path = '/api/spotify/playback/previous';
+          }
+        }
+        const r = await fetch(HOST + path, { method: 'POST' });
+        if (r.ok) {
+          if (kind === 'next' || kind === 'previous') clearRenderedQueue();
+          refreshSpotifyQueueAfterPlayback();
+        }
+      }
       catch { /* surfaced by next poll's status */ }
       finally { inFlight[key] = false; }
     }
 
-    prevBtn.addEventListener('click', () => postAction('/api/media/previous', 'prev'));
-    toggleBtn.addEventListener('click', () => postAction('/api/media/toggle', 'toggle'));
-    nextBtn.addEventListener('click', () => postAction('/api/media/next', 'next'));
+    prevBtn.addEventListener('click', () => postAction('previous', 'prev'));
+    toggleBtn.addEventListener('click', () => postAction('toggle', 'toggle'));
+    nextBtn.addEventListener('click', () => postAction('next', 'next'));
     libBtn.addEventListener('click', async () => {
       if (lastLibMode === 'connect') {
         // POST /api/spotify/connect — host opens the user's default browser
@@ -1547,7 +1601,13 @@
       }
     }
 
-    async function pollSpotifyQueue() {
+    function clearRenderedQueue() {
+      spotifyQueue = [];
+      setUpnext('');
+      if (listVisible()) applyView();
+    }
+
+    async function pollSpotifyQueue(forceRefresh = false) {
       if (!spotifyAuthed) {
         setUpnext('');
         spotifyQueue = [];
@@ -1556,10 +1616,13 @@
         if (listVisible()) applyView();
         return;
       }
-      if (spotifyQueueInFlight) return;
+      if (spotifyQueueInFlight) {
+        if (forceRefresh) spotifyQueueForcePending = true;
+        return;
+      }
       spotifyQueueInFlight = true;
       try {
-        const r = await fetch(HOST + '/api/spotify/queue');
+        const r = await fetch(HOST + '/api/spotify/queue' + (forceRefresh ? '?force=true' : ''));
         if (!r.ok) return;
         const data = await r.json();
         spotifyQueue = Array.isArray(data) ? data : [];
@@ -1576,7 +1639,13 @@
         // round-trip (which can take 100ms-4s in our logs).
         prefetchLyricsForQueue();
       } catch { /* non-fatal */ }
-      finally { spotifyQueueInFlight = false; }
+      finally {
+        spotifyQueueInFlight = false;
+        if (spotifyQueueForcePending) {
+          spotifyQueueForcePending = false;
+          pollSpotifyQueue(true);
+        }
+      }
     }
 
     async function pollSpotifyPlaylists() {
@@ -1609,12 +1678,45 @@
     // setView() also primes the relevant data poll so the user doesn't
     // see a stale list — the periodic pollers keep it fresh after that.
 
+    async function refreshSpotifyQueueAfterPlayback() {
+      await Promise.allSettled([
+        pollOnce(),
+        pollSpotifyQueue(true),
+      ]);
+      setTimeout(() => {
+        pollOnce();
+        pollSpotifyQueue(true);
+      }, 1200);
+      setTimeout(() => {
+        pollOnce();
+      }, 2600);
+    }
+
+    async function playTrack(id) {
+      try {
+        const r = await fetch(HOST + '/api/spotify/play/track/' + encodeURIComponent(id), { method: 'POST' });
+        if (!r.ok) return false;
+        clearRenderedQueue();
+        refreshSpotifyQueueAfterPlayback();
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     async function playPlaylist(id) {
       // Host route is /api/spotify/play/playlist/{id} (mirrors /play/track/{id}).
       // The widget previously posted to /playlists/{id}/play which 404'd
       // silently — taps did nothing.
-      try { await fetch(HOST + '/api/spotify/play/playlist/' + encodeURIComponent(id), { method: 'POST' }); }
-      catch { /* surfaced by next poll's status */ }
+      try {
+        const r = await fetch(HOST + '/api/spotify/play/playlist/' + encodeURIComponent(id), { method: 'POST' });
+        if (!r.ok) return false;
+        clearRenderedQueue();
+        refreshSpotifyQueueAfterPlayback();
+        return true;
+      } catch {
+        return false;
+      }
     }
 
     // --- Audio source picker --------------------------------------------
@@ -1679,7 +1781,7 @@
       currentView = view;
       // Prime the relevant data so the list isn't blank on first open.
       if (view === 'playlists') pollSpotifyPlaylists();
-      if (view === 'queue') pollSpotifyQueue();
+      if (view === 'queue') pollSpotifyQueue(true);
       if (view === 'audio-source') loadAudioSources();
       // Settings view: reset to the General tab on fresh entry. When
       // backing out of audio-source (where the user came from the
@@ -1721,21 +1823,24 @@
       eqBars.push({ slot, bar, reflect, peak });
     }
     const SVG_NS = 'http://www.w3.org/2000/svg';
+    const eqRadialDom = document.createElement('div');
+    eqRadialDom.className = 'eq-radial';
+    const eqRadialSpokes = [];
+    for (let i = 0; i < EQ_RADIAL_COUNT; i++) {
+      const spoke = document.createElement('div');
+      spoke.className = 'eq-radial-spoke';
+      eqRadialDom.appendChild(spoke);
+      eqRadialSpokes.push(spoke);
+    }
+    const eqRadialCore = document.createElement('div');
+    eqRadialCore.className = 'eq-radial-core';
+    eqRadialDom.appendChild(eqRadialCore);
+    eqVisualizer.appendChild(eqRadialDom);
+
     const eqSvg = document.createElementNS(SVG_NS, 'svg');
     eqSvg.classList.add('eq-svg');
     eqSvg.setAttribute('aria-hidden', 'true');
     eqSvg.setAttribute('focusable', 'false');
-
-    const eqRadialLayer = document.createElementNS(SVG_NS, 'g');
-    const eqRadialLines = [];
-    for (let i = 0; i < EQ_RADIAL_COUNT; i++) {
-      const line = document.createElementNS(SVG_NS, 'line');
-      line.setAttribute('stroke-linecap', 'round');
-      eqRadialLayer.appendChild(line);
-      eqRadialLines.push(line);
-    }
-    const eqRadialCore = document.createElementNS(SVG_NS, 'circle');
-    eqRadialLayer.appendChild(eqRadialCore);
 
     const eqTunnelLayer = document.createElementNS(SVG_NS, 'g');
     const eqTunnelRings = [];
@@ -1746,14 +1851,6 @@
       eqTunnelLayer.appendChild(poly);
       eqTunnelRings.push(poly);
     }
-    const eqTunnelSpokes = [];
-    for (let i = 0; i < EQ_TUNNEL_SIDES; i++) {
-      const line = document.createElementNS(SVG_NS, 'line');
-      line.setAttribute('stroke-linecap', 'round');
-      eqTunnelLayer.appendChild(line);
-      eqTunnelSpokes.push(line);
-    }
-    eqSvg.appendChild(eqRadialLayer);
     eqSvg.appendChild(eqTunnelLayer);
     eqVisualizer.appendChild(eqSvg);
 
@@ -1795,6 +1892,50 @@
     // because the album theme doesn't use a class — its accent values
     // are set inline by JS so they track the current cover.
     const THEME_NAMES = [null, 'rainbow', 'neon', 'sunset', 'aurora', 'mono'];
+    // Static hex values for the named themes (indices 1..5). Must mirror the
+    // .theme-* --theme-accent values in the CSS block above — they're kept
+    // separate so JS can publish the effective accent to the host without
+    // reading getComputedStyle (which can return rgb() form, requires extra
+    // parsing, and isn't reliable until layout has settled). Index 0 is null
+    // because album mode is dynamic — its accent comes from eqColorTop.
+    const THEME_ACCENT_HEX = [
+      null,
+      '#ff3b6b', // rainbow
+      '#00e5ff', // neon
+      '#ff5e87', // sunset
+      '#3ce0ff', // aurora
+      '#ffffff', // mono
+    ];
+
+    function _rgbToHex(r, g, b) {
+      const c = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+      return '#' + c(r) + c(g) + c(b);
+    }
+
+    /**
+     * Publishes the *effective* current accent hex to the shared widget
+     * settings under `currentThemeAccent`. The audio-switcher widget reads
+     * this and applies it to its own --accent-color so both widgets always
+     * agree on a single accent — including for the album theme where the
+     * value is derived from the cover and changes every track.
+     *
+     * Called from applyTheme, which is itself called whenever the user
+     * changes the theme setting or whenever new album art is processed and
+     * we're in album mode. updateSetting short-circuits when the value
+     * hasn't changed, so back-to-back applyTheme calls with identical
+     * effective accents don't generate redundant POSTs.
+     */
+    function publishCurrentThemeAccent() {
+      let hex;
+      if (optTheme === 0) {
+        // Album mode — eqColorTop was updated by updateEqColorsFromArt
+        // before applyTheme runs in the artEl load handler.
+        hex = _rgbToHex(eqColorTop[0], eqColorTop[1], eqColorTop[2]);
+      } else {
+        hex = THEME_ACCENT_HEX[optTheme] ?? '#1db954';
+      }
+      updateSetting('currentThemeAccent', hex);
+    }
 
     // --- Preset palettes (ported from the Equalizer.zip prototype) ------
     // Each is a function (t, time) → [r,g,b] where t ∈ [0,1] is the bar
@@ -1986,13 +2127,11 @@
       return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
     }
 
-    // Sample the album-art img into a 64×64 offscreen canvas, then
-    // bucket pixels into a 6×6×6 RGB cube and pick the dominant cube
-    // (weighted by saturation so a single bright accent beats a wash
-    // of muted pixels). This handles mostly-dark covers far better
-    // than the old "average all vibrant pixels" approach — averaging
-    // collapses three vibrant hues into mud, while histogram picks
-    // whichever hue actually dominates.
+    // Sample the album-art img into a 64×64 offscreen canvas, then take a
+    // weighted average of representative colored pixels. A previous bucketed
+    // "most saturated cluster wins" pass could grab a tiny green/yellow patch
+    // from the cover and turn the whole UI into highlighter yellow; this is
+    // intentionally more album-level than accent-pixel-level.
     const _eqExtractSize = 64;
     const _eqExtractCanvas = document.createElement('canvas');
     _eqExtractCanvas.width = _eqExtractSize;
@@ -2005,40 +2144,32 @@
         _eqExtractCtx.clearRect(0, 0, sz, sz);
         _eqExtractCtx.drawImage(img, 0, 0, sz, sz);
         const data = _eqExtractCtx.getImageData(0, 0, sz, sz).data;
-        // 6³ = 216 possible buckets. Encoded as a single int key so the
-        // Map stays cheap (no string concat per pixel).
-        const buckets = new Map();
-        for (let i = 0; i < data.length; i += 4) {
+        let total = 0;
+        let r = 0, g = 0, b = 0;
+        for (let i = 0, p = 0; i < data.length; i += 4, p++) {
           const pr = data[i], pg = data[i+1], pb = data[i+2];
           const lum = (pr + pg + pb) / 3;
-          if (lum < 20 || lum > 235) continue;          // skip near-black / near-white
+          if (lum < 24 || lum > 225) continue;          // skip near-black / near-white
           const maxC = Math.max(pr, pg, pb);
           const minC = Math.min(pr, pg, pb);
-          if (maxC - minC < 20) continue;                // skip near-gray
-          const k = ((pr >> 5) << 10) | ((pg >> 5) << 5) | (pb >> 5);
-          let b = buckets.get(k);
-          if (!b) { b = { count: 0, r: 0, g: 0, b: 0 }; buckets.set(k, b); }
-          b.count++; b.r += pr; b.g += pg; b.b += pb;
-        }
-        if (buckets.size === 0) return null;
-        // Score = count × (1 + 1.5×saturation). The bonus rewards
-        // distinctive colors over abundant-but-muted ones, which is
-        // closer to what Spotify et al. do — they pick the "look at
-        // me" color, not the mathematical center of mass.
-        let best = null, bestScore = -1;
-        for (const b of buckets.values()) {
-          const avgR = b.r / b.count;
-          const avgG = b.g / b.count;
-          const avgB = b.b / b.count;
-          const maxC = Math.max(avgR, avgG, avgB);
-          const minC = Math.min(avgR, avgG, avgB);
+          if (maxC - minC < 18) continue;                // skip near-gray
+
+          const x = p % sz;
+          const y = Math.floor(p / sz);
+          const dx = (x + 0.5) / sz - 0.5;
+          const dy = (y + 0.5) / sz - 0.5;
+          const center = 1 - Math.min(1, Math.hypot(dx, dy) / 0.72);
           const sat = maxC === 0 ? 0 : (maxC - minC) / maxC;
-          const score = b.count * (1 + sat * 1.5);
-          if (score > bestScore) { bestScore = score; best = b; }
+          const midtone = 1 - Math.min(1, Math.abs(lum - 130) / 150);
+          const weight = (0.75 + center * 0.35) * (0.85 + sat * 0.35) * (0.75 + midtone * 0.25);
+
+          total += weight;
+          r += pr * weight;
+          g += pg * weight;
+          b += pb * weight;
         }
-        return [Math.round(best.r / best.count),
-                Math.round(best.g / best.count),
-                Math.round(best.b / best.count)];
+        if (total <= 0) return null;
+        return [Math.round(r / total), Math.round(g / total), Math.round(b / total)];
       } catch {
         // Tainted canvas (cross-origin without CORS) or any other failure.
         // The img tag has crossorigin="anonymous" and the host's CORS is
@@ -2057,13 +2188,14 @@
         eqColorBot = EQ_DEFAULT_BOT;
         return;
       }
-      const [h, s] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
-      // Floor the saturation so washed-out covers still produce a
-      // visible chroma swing. Cap it so highly-saturated covers don't
-      // produce neon eye-melt.
-      const boostS = Math.max(0.55, Math.min(0.9, s + 0.15));
-      eqColorTop = hslToRgb(h, boostS, 0.55);
-      eqColorBot = hslToRgb(h, boostS * 0.7, 0.28);
+      const [h, s, l] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      // Keep the sampled cover mood. The old fixed 0.55 lightness made
+      // brown/olive covers look neon; this nudges dark covers into readable
+      // territory without flattening every album into the same bright accent.
+      const boostS = Math.max(0.38, Math.min(0.72, s + 0.08));
+      const topL = Math.max(0.38, Math.min(0.52, l + 0.10));
+      eqColorTop = hslToRgb(h, boostS, topL);
+      eqColorBot = hslToRgb(h, boostS * 0.72, Math.max(0.18, topL * 0.54));
     }
 
     function updateEqColorsFromArt() {
@@ -2104,8 +2236,41 @@
       eqVisualizer.classList.toggle('eq-mode-bars', optEqVisualizerMode === 0);
       eqVisualizer.classList.toggle('eq-mode-radial', optEqVisualizerMode === 1);
       eqVisualizer.classList.toggle('eq-mode-tunnel', optEqVisualizerMode === 2);
-      eqRadialLayer.style.display = optEqVisualizerMode === 1 ? '' : 'none';
       eqTunnelLayer.style.display = optEqVisualizerMode === 2 ? '' : 'none';
+    }
+
+    function getEqVisualRegion(isFullMode) {
+      const w = eqCssW;
+      const h = eqCssH;
+      let left = 0;
+      let top = 0;
+      let width = w;
+      let height = h;
+
+      const wantsArtLayout = !isFullMode
+          && rootEl.classList.contains('eq-as-bg')
+          && rootEl.classList.contains('eq-show-art');
+      if (wantsArtLayout) {
+        const ar = artEl.getBoundingClientRect();
+        const cr = eqVisualizer.getBoundingClientRect();
+        if (ar.width > 0 && ar.height > 0) {
+          const edge = 10;
+          if (rootEl.classList.contains('size-wide')) {
+            left = Math.max(0, Math.min(w - 40, (ar.right - cr.left) + edge));
+            width = Math.max(40, w - left - w * 0.04);
+          } else {
+            top = Math.max(0, Math.min(h - 40, (ar.bottom - cr.top) + edge));
+            height = Math.max(40, h - top - 8);
+          }
+        }
+      }
+
+      return {
+        left, top, width, height,
+        cx: left + width / 2,
+        cy: top + height / 2,
+        minSide: Math.min(width, height),
+      };
     }
 
     // Apply the user's selected theme to the root element. Drives every
@@ -2144,6 +2309,13 @@
       } else {
         cls.add('theme-' + name);
       }
+
+      // Share the effective accent with the audio-switcher widget.
+      // updateSetting short-circuits when unchanged AND saveSettings is
+      // debounced, so calling this at the end of every applyTheme is safe:
+      // no thrash on idle, picks up new album colors as soon as the cover
+      // loads.
+      publishCurrentThemeAccent();
     }
 
     function applyEqVisibility() {
@@ -2222,10 +2394,9 @@
         parts.reflect.style.transform = 'scaleY(0)';
         parts.peak.style.opacity = '0';
       }
-      for (const line of eqRadialLines) line.style.opacity = '0';
+      for (const spoke of eqRadialSpokes) spoke.style.opacity = '0';
       eqRadialCore.style.opacity = '0';
       for (const poly of eqTunnelRings) poly.style.opacity = '0';
-      for (const line of eqTunnelSpokes) line.style.opacity = '0';
       eqLastRenderAt = 0;
     }
 
@@ -2279,7 +2450,7 @@
           const hr = horizonEl.getBoundingClientRect();
           if (hr.height >= 0 && hr.width > 0) {
             const horizonY = hr.top - cr.top + hr.height / 2;
-            const candidate = baseY - horizonY;
+            const candidate = baseY - horizonY - 2;
             if (candidate > h * 0.10) maxH = Math.min(maxH, candidate);
           }
         }
@@ -2367,7 +2538,7 @@
         const v = (eqSpectrum[binIdx] * 0.78 + eqSpectrum[neighborIdx] * 0.22) * centerLift;
         const bh = Math.min(drawMaxH, v * drawMaxH);
         const peakDrop = drawMaxH * (isFullMode ? 0.95 : 0.7) * dt;
-        eqPeaks[i] = Math.max(eqPeaks[i] - peakDrop, bh);
+        eqPeaks[i] = Math.min(drawMaxH, Math.max(eqPeaks[i] - peakDrop, bh));
         const scale = drawMaxH > 0 ? Math.max(0, Math.min(1, bh / drawMaxH)) : 0;
         const parts = eqBars[i];
 
@@ -2399,7 +2570,7 @@
 
         if (eqPeaks[i] > 2) {
           parts.peak.style.background = rgba(ct, (isFullMode ? 0.92 : 0.72) * bgAlpha);
-          parts.peak.style.transform = `translateY(${(drawBaseY - eqPeaks[i] - 3).toFixed(2)}px)`;
+          parts.peak.style.transform = `translateY(${(drawBaseY - eqPeaks[i] + 1).toFixed(2)}px)`;
           parts.peak.style.opacity = '1';
         } else {
           parts.peak.style.opacity = '0';
@@ -2415,40 +2586,42 @@
 
       const isFullMode = eqVisualizer.classList.contains('show-full');
       const elapsed = performance.now() / 1000;
-      const cx = w / 2;
-      const cy = h / 2;
-      const minSide = Math.min(w, h);
+      const region = getEqVisualRegion(isFullMode);
+      const cx = region.cx;
+      const cy = region.cy;
+      const minSide = region.minSide;
       const baseR = minSide * (isFullMode ? 0.15 : 0.11) * (1 + eqBass * 0.28);
       const maxLen = minSide * (isFullMode ? 0.34 : 0.24);
       const alpha = isFullMode ? 0.95 : 0.42;
       const total = EQ_RADIAL_COUNT;
       const rotation = elapsed * 0.08;
 
-      eqSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-
       for (let s = 0; s < total; s++) {
         const bin = s < EQ_BINS ? s : (total - 1 - s);
         const v = eqSpectrum[Math.max(0, Math.min(EQ_BINS - 1, bin))];
         const ang = (s / total) * Math.PI * 2 + rotation;
-        const len = baseR + v * maxLen;
+        const spokeLen = Math.max(2, v * maxLen);
         const c = eqPaletteColor(bin / EQ_BINS, elapsed);
-        const line = eqRadialLines[s];
-        line.setAttribute('x1', (cx + Math.cos(ang) * baseR).toFixed(2));
-        line.setAttribute('y1', (cy + Math.sin(ang) * baseR).toFixed(2));
-        line.setAttribute('x2', (cx + Math.cos(ang) * len).toFixed(2));
-        line.setAttribute('y2', (cy + Math.sin(ang) * len).toFixed(2));
-        line.setAttribute('stroke', eqRgba(c, alpha));
-        line.setAttribute('stroke-width', (isFullMode ? 2.8 : 2.0).toFixed(2));
-        line.style.opacity = '1';
+        const lineW = isFullMode ? 3.2 : 2.2;
+        const x = cx + Math.cos(ang) * baseR;
+        const y = cy + Math.sin(ang) * baseR;
+        const spoke = eqRadialSpokes[s];
+        spoke.style.width = spokeLen.toFixed(2) + 'px';
+        spoke.style.height = lineW.toFixed(2) + 'px';
+        spoke.style.background = eqRgba(c, alpha);
+        spoke.style.opacity = '1';
+        spoke.style.transform =
+          `translate(${x.toFixed(2)}px, ${(y - lineW / 2).toFixed(2)}px) rotate(${ang.toFixed(4)}rad)`;
       }
 
       const coreColor = eqPaletteColor(0.5, elapsed);
-      eqRadialCore.setAttribute('cx', cx.toFixed(2));
-      eqRadialCore.setAttribute('cy', cy.toFixed(2));
-      eqRadialCore.setAttribute('r', (baseR * (0.62 + eqBeatHold * 0.35)).toFixed(2));
-      eqRadialCore.setAttribute('fill', eqRgba(coreColor, (isFullMode ? 0.24 : 0.14) + eqBeatHold * 0.28));
-      eqRadialCore.setAttribute('stroke', eqRgba(coreColor, isFullMode ? 0.45 : 0.24));
-      eqRadialCore.setAttribute('stroke-width', (1.5 + eqBass * 2.5).toFixed(2));
+      const coreSize = baseR * (1.24 + eqBeatHold * 0.7);
+      eqRadialCore.style.width = coreSize.toFixed(2) + 'px';
+      eqRadialCore.style.height = coreSize.toFixed(2) + 'px';
+      eqRadialCore.style.border = (1.5 + eqBass * 2.5).toFixed(2) + 'px solid '
+        + eqRgba(coreColor, isFullMode ? 0.45 : 0.24);
+      eqRadialCore.style.background = eqRgba(coreColor, (isFullMode ? 0.24 : 0.14) + eqBeatHold * 0.28);
+      eqRadialCore.style.transform = `translate(${(cx - coreSize / 2).toFixed(2)}px, ${(cy - coreSize / 2).toFixed(2)}px)`;
       eqRadialCore.style.opacity = '1';
     }
 
@@ -2460,9 +2633,10 @@
 
       const isFullMode = eqVisualizer.classList.contains('show-full');
       const elapsed = performance.now() / 1000;
-      const cx = w / 2;
-      const cy = h / 2;
-      const maxR = Math.hypot(w, h) * (isFullMode ? 0.58 : 0.46);
+      const region = getEqVisualRegion(isFullMode);
+      const cx = region.cx;
+      const cy = region.cy;
+      const maxR = Math.hypot(region.width, region.height) * (isFullMode ? 0.58 : 0.46);
       const speed = 1 + eqBass * 1.8;
       const phase = (elapsed * 0.6 * speed) % 1;
       const alphaScale = isFullMode ? 1 : 0.46;
@@ -2471,7 +2645,7 @@
 
       for (let i = EQ_TUNNEL_RINGS - 1; i >= 0; i--) {
         const k = (i + phase) / EQ_TUNNEL_RINGS;
-        const r = Math.pow(k, 2.15) * maxR + Math.min(w, h) * 0.045;
+        const r = Math.pow(k, 2.15) * maxR + region.minSide * 0.045;
         const rot = elapsed * 0.3 + i * 0.15 + eqMid * 1.1;
         const c = eqPaletteColor(k + elapsed * 0.04, elapsed);
         let points = '';
@@ -2489,20 +2663,6 @@
         poly.style.opacity = '1';
       }
 
-      const spokeAlpha = Math.max(0, Math.min(1, (eqBeatHold - 0.12) * 1.8));
-      for (let s = 0; s < EQ_TUNNEL_SIDES; s++) {
-        const a = elapsed * 0.3 + (s / EQ_TUNNEL_SIDES) * Math.PI * 2;
-        const r = Math.min(w, h) * (0.24 + eqBeatHold * 0.18);
-        const c = eqPaletteColor(s / EQ_TUNNEL_SIDES + elapsed * 0.04, elapsed);
-        const line = eqTunnelSpokes[s];
-        line.setAttribute('x1', cx.toFixed(2));
-        line.setAttribute('y1', cy.toFixed(2));
-        line.setAttribute('x2', (cx + Math.cos(a) * r).toFixed(2));
-        line.setAttribute('y2', (cy + Math.sin(a) * r).toFixed(2));
-        line.setAttribute('stroke', eqRgba(c, spokeAlpha * alphaScale));
-        line.setAttribute('stroke-width', (1.0 + eqBass * 1.8).toFixed(2));
-        line.style.opacity = spokeAlpha > 0.01 ? '1' : '0';
-      }
     }
 
     // Re-measure the visualizer whenever the root cell does.
@@ -2598,16 +2758,11 @@
         currentView === 'playlists' || currentView === 'audio-source');
       rootEl.classList.toggle('settings-mode', currentView === 'settings');
 
-      // Queue button is redundant when the queue is the visible content
-      // (tapping it would toggle to lyrics, but if there are no lyrics
-      // we'd be sent right back here — confusing). Hide it in that case.
-      // Stays visible when on lyrics, playlists, audio-source, or
-      // settings so the user can always jump to queue.
-      const queueIsCenter = showList
-        && currentView !== 'playlists'
-        && currentView !== 'audio-source'
-        && currentView !== 'settings';
-      queueBtn.classList.toggle('hidden', queueIsCenter);
+      // Only hide the queue button for the implicit no-lyrics fallback.
+      // When the user explicitly opens queue, it stays visible as the
+      // toggle back to lyrics.
+      const queueIsImplicitFallback = showList && currentView === 'lyrics';
+      queueBtn.classList.toggle('hidden', queueIsImplicitFallback);
       // Active class mirrors the user's explicit choice, not the
       // effective view — a lyrics-less track's auto-fallback shouldn't
       // light the toggle up.
@@ -2657,8 +2812,9 @@
         frag.appendChild(empty);
       } else {
         for (const t of spotifyQueue) {
-          const row = document.createElement('div');
+          const row = document.createElement('button');
           row.className = 'list-row';
+          row.type = 'button';
           const img = document.createElement('img');
           img.className = 'lr-art';
           img.alt = '';
@@ -2675,6 +2831,12 @@
           meta.appendChild(sub);
           row.appendChild(img);
           row.appendChild(meta);
+          row.addEventListener('click', async () => {
+            if (!t.id) return;
+            if (await playTrack(t.id)) {
+              setView('lyrics');
+            }
+          });
           frag.appendChild(row);
         }
       }
@@ -2736,77 +2898,16 @@
           meta.appendChild(sub);
           row.appendChild(img);
           row.appendChild(meta);
-          row.addEventListener('click', () => {
-            if (pl.id) playPlaylist(pl.id);
-            // Snap back to lyrics/queue so the user sees the track
-            // they just kicked off, not the playlist list.
-            setView('lyrics');
+          row.addEventListener('click', async () => {
+            if (!pl.id) return;
+            if (await playPlaylist(pl.id)) {
+              // Snap back to lyrics/queue so the user sees the track
+              // they just kicked off, not the playlist list.
+              setView('lyrics');
+            }
           });
           frag.appendChild(row);
         }
-      }
-      // Audio source picker entry — always available in the playlists
-      // view (auth-independent — the visualizer needs to work whether or
-      // not Spotify is connected, and the audio capture device is the
-      // user's choice regardless). Tap opens the audio-source sub-view.
-      const sourceRow = document.createElement('button');
-      sourceRow.className = 'list-row';
-      sourceRow.type = 'button';
-      sourceRow.style.marginTop = '8px';
-      sourceRow.style.borderTop = '1px solid rgba(255,255,255,0.08)';
-      sourceRow.style.paddingTop = '12px';
-      const srcIcon = document.createElement('div');
-      srcIcon.className = 'lr-art';
-      srcIcon.style.display = 'flex';
-      srcIcon.style.alignItems = 'center';
-      srcIcon.style.justifyContent = 'center';
-      srcIcon.style.fontSize = '20px';
-      srcIcon.textContent = '🔊';
-      const srcMeta = document.createElement('div');
-      srcMeta.className = 'lr-meta';
-      const srcName = document.createElement('div');
-      srcName.className = 'lr-name';
-      srcName.textContent = 'Equalizer audio source';
-      const srcSub = document.createElement('div');
-      srcSub.className = 'lr-sub';
-      srcSub.textContent = audioSourceActiveName || 'System default';
-      srcMeta.appendChild(srcName);
-      srcMeta.appendChild(srcSub);
-      sourceRow.appendChild(srcIcon);
-      sourceRow.appendChild(srcMeta);
-      sourceRow.addEventListener('click', () => {
-        audioSourceFrom = 'playlists';
-        setView('audio-source');
-      });
-      frag.appendChild(sourceRow);
-
-      // Disconnect lives at the bottom of the playlists list — only
-      // surfaced when the user is intentionally in the auth-affected
-      // view, so it's discoverable without being in the way of the
-      // common case (just tapping a playlist).
-      if (spotifyAuthed) {
-        const disconnect = document.createElement('button');
-        disconnect.className = 'list-row';
-        disconnect.type = 'button';
-        disconnect.style.marginTop = '8px';
-        disconnect.style.opacity = '0.65';
-        const icon = document.createElement('div');
-        icon.className = 'lr-art';
-        icon.style.display = 'flex';
-        icon.style.alignItems = 'center';
-        icon.style.justifyContent = 'center';
-        icon.style.fontSize = '18px';
-        icon.textContent = '⏻';
-        const meta = document.createElement('div');
-        meta.className = 'lr-meta';
-        const name = document.createElement('div');
-        name.className = 'lr-name';
-        name.textContent = 'Disconnect Spotify';
-        meta.appendChild(name);
-        disconnect.appendChild(icon);
-        disconnect.appendChild(meta);
-        disconnect.addEventListener('click', disconnectSpotify);
-        frag.appendChild(disconnect);
       }
       listViewEl.textContent = '';
       listViewEl.appendChild(frag);
@@ -3395,10 +3496,11 @@
         const artist = np.hasSession ? (np.artist || '') : '';
         if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
         if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
+        lastIsSpotify = !!np.isSpotify && !!np.hasSession;
         // Source line: visible only when Spotify is the SMTC source.
         // (Other sources just don't show this line — title/artist alone is
         // enough for non-Spotify SMTC playback.)
-        setSource(!!np.isSpotify && !!np.hasSession, np.album || '');
+        setSource(lastIsSpotify, np.album || '');
         setArt(!!np.hasArt && !!np.hasSession, np.artVersion ?? 0);
 
         const playing = np.status === 'Playing';
@@ -3458,6 +3560,11 @@
         // now actually playing.
         if (trackChanged && currentView !== 'lyrics') {
           currentView = 'lyrics';
+          applyView();
+        }
+        if (trackChanged && spotifyAuthed && lastIsSpotify) {
+          clearRenderedQueue();
+          pollSpotifyQueue(true);
         }
         if (trackChanged && np.hasSession && artist && title) {
           fetchLyricsFor(artist, title, np.album || '');
@@ -3487,7 +3594,7 @@
       if (optTheme === 0) applyTheme();
     });
     // On every album-art change, re-derive the equalizer's two-tone
-    // gradient from the new cover. extractDominantColor uses 32×32 of
+    // gradient from the new cover. extractDominantColor uses 64×64 of
     // pixel data which is cheap (~30µs) so doing it on every load is
     // fine. CORS lets the canvas read the cross-origin host response.
     // For the Album theme, also refresh the global accent so the play

@@ -2,6 +2,7 @@
   let {
     value,
     muted = false,
+    disabled = false,
     onChange,
     onToggleMute,
     onMaxVolume,
@@ -10,6 +11,10 @@
   }: {
     value: number;
     muted?: boolean;
+    /** When true, the slider rejects pointer + keyboard input and the
+     *  flanking buttons are inert. Used to lock all controls on a card
+     *  while a different card is mid-default-device-switch. */
+    disabled?: boolean;
     onChange: (v: number) => void;
     onToggleMute?: () => void;
     onMaxVolume?: () => void;
@@ -28,7 +33,7 @@
   }
 
   function handleDown(e: PointerEvent): void {
-    if (!trackEl) return;
+    if (disabled || !trackEl) return;
     e.preventDefault();
     dragging = true;
     try { trackEl.setPointerCapture(e.pointerId); } catch { /* best-effort */ }
@@ -36,7 +41,7 @@
     onChange(valueFromEvent(e));
   }
   function handleMove(e: PointerEvent): void {
-    if (!dragging) return;
+    if (disabled || !dragging) return;
     onChange(valueFromEvent(e));
   }
   function handleUp(e: PointerEvent): void {
@@ -49,6 +54,7 @@
     onAdjustEnd?.();
   }
   function handleKey(e: KeyboardEvent): void {
+    if (disabled) return;
     let next = value;
     switch (e.key) {
       case 'ArrowLeft': case 'ArrowDown': next = Math.max(0, value - 1); break;
@@ -66,8 +72,8 @@
   }
 </script>
 
-<div class="volume-row" class:muted>
-  <button class="end-btn" type="button" onclick={onToggleMute} aria-label={muted ? 'Unmute' : 'Mute'}>
+<div class="volume-row" class:muted class:disabled>
+  <button class="end-btn" type="button" onclick={onToggleMute} {disabled} aria-label={muted ? 'Unmute' : 'Mute'}>
     {#if muted}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M11 5L6 9H2v6h4l5 4z" fill="currentColor"/>
@@ -107,7 +113,7 @@
     </div>
   </div>
 
-  <button class="end-btn" type="button" onclick={onMaxVolume} aria-label="Max volume">
+  <button class="end-btn" type="button" onclick={onMaxVolume} {disabled} aria-label="Max volume">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M11 5L6 9H2v6h4l5 4z" fill="currentColor"/>
       <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>

@@ -25,15 +25,21 @@ export function stopPolling(): void {
 async function poll(): Promise<void> {
   if (stopped) return;
   try {
-    const [devices, sessions] = await Promise.all([
+    // Widget settings (shared with media widget) come along for the ride so
+    // the audio-switcher can mirror the media widget's theme accent in
+    // real-time. The settings endpoint is a single local JSON file read on
+    // the host — negligible cost vs. devices+sessions enumeration.
+    const [devices, sessions, settings] = await Promise.all([
       host.listAudioDevices(),
       host.listSessions(),
+      host.getWidgetSettings().catch(() => null),
     ]);
 
     let firstRunPinId: string | null = null;
 
     appStore.update(s => {
       let next: typeof s = { ...s, connected: true, error: null };
+      if (settings) next.widgetSettings = settings;
 
       next.devices = s.adjustingDeviceId === null
         ? devices
@@ -50,6 +56,20 @@ async function poll(): Promise<void> {
               ? { ...se, volume: s.sessions.find(x => x.id === se.id)?.volume ?? se.volume }
               : se
           );
+
+      // Audibility tracking. Threshold 0.01 (≈ -40dBFS) rejects digital noise
+      // floor and stray meter twitches; anything a user could plausibly hear
+      // will routinely exceed this. We update timestamps *only* for sessions
+      // currently in the list — sessions that disappear retain their last
+      // known timestamp until the map garbage-collects, which is fine because
+      // gone sessions won't be sorted/rendered anyway.
+      const now = Date.now();
+      const SOUND_THRESHOLD = 0.01;
+      const nextLastSound: Record<string, number> = { ...s.lastSoundAtBySessionId };
+      for (const se of sessions) {
+        if (se.peak > SOUND_THRESHOLD) nextLastSound[se.id] = now;
+      }
+      next.lastSoundAtBySessionId = nextLastSound;
 
       if (s.pendingDefaultId && devices.some(d => d.id === s.pendingDefaultId && d.isDefault)) {
         next.pendingDefaultId = null;

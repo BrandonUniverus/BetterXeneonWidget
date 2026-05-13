@@ -16,11 +16,46 @@ export interface AudioSession {
   state: string;
   volume: number;
   muted: boolean;
+  /**
+   * Real-time peak amplitude (0..1) from WASAPI's per-session meter.
+   * Non-zero means this session has produced sound in the last audio
+   * buffer. Widget uses this to sort "currently making sound" first
+   * and to dim rows that haven't produced sound recently.
+   */
+  peak: number;
 }
 
 export interface VolumeState {
   level: number;
   muted: boolean;
+}
+
+/**
+ * Snapshot of SteelSeries Sonar's "ALL OUTPUT DEVICES" panel — which
+ * physical devices Sonar knows about and which one is currently selected
+ * as Sonar's master output. `available: false` means the host couldn't
+ * reach Sonar (GG not running, port discovery failed, etc.); the rest of
+ * the fields will be null/empty in that case.
+ */
+export interface SteelSeriesStatus {
+  available: boolean;
+  currentDeviceName: string | null;
+  currentDeviceId: string | null;
+  devices: SteelSeriesDevice[];
+  error?: string | null;
+}
+
+export interface SteelSeriesDevice {
+  id: string;
+  name: string;
+  isCurrent: boolean;
+}
+
+export interface SteelSeriesSwapResult {
+  ok: boolean;
+  newDeviceName: string | null;
+  newDeviceId: string | null;
+  error: string | null;
 }
 
 export interface AccentColor {
@@ -173,6 +208,16 @@ export class HostClient {
     await this.send('/api/config/pins', { pinnedIds });
   }
 
+  /**
+   * Returns the shared widget-settings JSON object — the same blob the media
+   * widget uses to persist its theme/options. Untyped because both widgets
+   * push arbitrary keys into it; callers should pick out the keys they care
+   * about and tolerate missing or unexpected values.
+   */
+  async getWidgetSettings(): Promise<Record<string, unknown>> {
+    return this.json<Record<string, unknown>>('/api/widget/settings');
+  }
+
   // ---------- Sessions (apps mixer) ----------
 
   async listSessions(): Promise<AudioSession[]> {
@@ -185,6 +230,29 @@ export class HostClient {
 
   async setSessionMute(id: string, muted: boolean): Promise<void> {
     await this.send('/api/audio/sessions/mute', { id, muted });
+  }
+
+  // ---------- SteelSeries Sonar (output device cycling) ----------
+
+  async getSteelSeriesStatus(): Promise<SteelSeriesStatus> {
+    return this.json<SteelSeriesStatus>('/api/audio/steelseries/status');
+  }
+
+  /**
+   * Cycles Sonar's master output to the next physical device. Resolves with
+   * the new device on success; throws on transport errors. A 502 response
+   * (Sonar unreachable, or some channel PUT failed mid-swap) is surfaced as
+   * an Error with the body message.
+   */
+  async swapSteelSeriesOutput(): Promise<SteelSeriesSwapResult> {
+    const res = await this.fetchImpl(`${this.baseUrl}/api/audio/steelseries/swap`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const body = (await res.json()) as SteelSeriesSwapResult;
+    if (!res.ok && !body.error) throw new Error(`/api/audio/steelseries/swap → ${res.status}`);
+    return body;
   }
 
   // ---------- System ----------

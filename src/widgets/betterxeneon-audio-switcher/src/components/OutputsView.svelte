@@ -2,6 +2,7 @@
   import { shortenDeviceNames } from '../name-shortener.ts';
   import { appStore } from '../state.ts';
   import OutputCard from './OutputCard.svelte';
+  import SteelSeriesSwapRow from './SteelSeriesSwapRow.svelte';
 </script>
 
 <section class="view" aria-label="Pinned audio outputs">
@@ -18,6 +19,9 @@
       <div class="empty-sub">Open settings (gear) to pick which devices appear here.</div>
     </div>
   {:else}
+    <!-- Renders nothing when Sonar isn't reachable, so the pinned cards
+         keep their normal layout for non-SteelSeries setups. -->
+    <SteelSeriesSwapRow />
     {#each $appStore.devices.filter(d => $appStore.pinnedIds.includes(d.id)) as device (device.id)}
       <OutputCard {device} displayName={shortenDeviceNames($appStore.devices).get(device.id) ?? device.name} />
     {/each}
