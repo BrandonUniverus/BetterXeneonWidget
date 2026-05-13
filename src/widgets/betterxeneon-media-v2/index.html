@@ -1265,6 +1265,7 @@
     let queueTimer = null;
     let playlistsTimer = null;
     let spotifyQueueInFlight = false;
+    let spotifyQueueForcePending = false;
     let spotifyPlaylistsInFlight = false;
 
     // View state for the content area: 'lyrics' (default — lyrics if
@@ -1370,6 +1371,7 @@
     let isPlaying = false;
     let lastTrackKey = '';
     let spotifyAuthed = false;
+    let lastIsSpotify = false;
 
     let parsedLyrics = [];
     let lyricLineEls = [];
@@ -1537,17 +1539,33 @@
       pulseTimeout = setTimeout(() => pulseEl.classList.remove('live'), 250);
     }
 
-    async function postAction(path, key) {
+    async function postAction(kind, key) {
       if (inFlight[key]) return;
       inFlight[key] = true;
-      try { await fetch(HOST + path, { method: 'POST' }); }
+      try {
+        let path = '/api/media/' + kind;
+        if (spotifyAuthed && lastIsSpotify) {
+          if (kind === 'toggle') {
+            path = lastIsPlaying ? '/api/spotify/playback/pause' : '/api/spotify/playback/play';
+          } else if (kind === 'next') {
+            path = '/api/spotify/playback/next';
+          } else if (kind === 'previous') {
+            path = '/api/spotify/playback/previous';
+          }
+        }
+        const r = await fetch(HOST + path, { method: 'POST' });
+        if (r.ok) {
+          if (kind === 'next' || kind === 'previous') clearRenderedQueue();
+          refreshSpotifyQueueAfterPlayback();
+        }
+      }
       catch { /* surfaced by next poll's status */ }
       finally { inFlight[key] = false; }
     }
 
-    prevBtn.addEventListener('click', () => postAction('/api/media/previous', 'prev'));
-    toggleBtn.addEventListener('click', () => postAction('/api/media/toggle', 'toggle'));
-    nextBtn.addEventListener('click', () => postAction('/api/media/next', 'next'));
+    prevBtn.addEventListener('click', () => postAction('previous', 'prev'));
+    toggleBtn.addEventListener('click', () => postAction('toggle', 'toggle'));
+    nextBtn.addEventListener('click', () => postAction('next', 'next'));
     libBtn.addEventListener('click', async () => {
       if (lastLibMode === 'connect') {
         // POST /api/spotify/connect — host opens the user's default browser
@@ -1583,7 +1601,13 @@
       }
     }
 
-    async function pollSpotifyQueue() {
+    function clearRenderedQueue() {
+      spotifyQueue = [];
+      setUpnext('');
+      if (listVisible()) applyView();
+    }
+
+    async function pollSpotifyQueue(forceRefresh = false) {
       if (!spotifyAuthed) {
         setUpnext('');
         spotifyQueue = [];
@@ -1592,10 +1616,13 @@
         if (listVisible()) applyView();
         return;
       }
-      if (spotifyQueueInFlight) return;
+      if (spotifyQueueInFlight) {
+        if (forceRefresh) spotifyQueueForcePending = true;
+        return;
+      }
       spotifyQueueInFlight = true;
       try {
-        const r = await fetch(HOST + '/api/spotify/queue');
+        const r = await fetch(HOST + '/api/spotify/queue' + (forceRefresh ? '?force=true' : ''));
         if (!r.ok) return;
         const data = await r.json();
         spotifyQueue = Array.isArray(data) ? data : [];
@@ -1612,7 +1639,13 @@
         // round-trip (which can take 100ms-4s in our logs).
         prefetchLyricsForQueue();
       } catch { /* non-fatal */ }
-      finally { spotifyQueueInFlight = false; }
+      finally {
+        spotifyQueueInFlight = false;
+        if (spotifyQueueForcePending) {
+          spotifyQueueForcePending = false;
+          pollSpotifyQueue(true);
+        }
+      }
     }
 
     async function pollSpotifyPlaylists() {
@@ -1645,12 +1678,45 @@
     // setView() also primes the relevant data poll so the user doesn't
     // see a stale list — the periodic pollers keep it fresh after that.
 
+    async function refreshSpotifyQueueAfterPlayback() {
+      await Promise.allSettled([
+        pollOnce(),
+        pollSpotifyQueue(true),
+      ]);
+      setTimeout(() => {
+        pollOnce();
+        pollSpotifyQueue(true);
+      }, 1200);
+      setTimeout(() => {
+        pollOnce();
+      }, 2600);
+    }
+
+    async function playTrack(id) {
+      try {
+        const r = await fetch(HOST + '/api/spotify/play/track/' + encodeURIComponent(id), { method: 'POST' });
+        if (!r.ok) return false;
+        clearRenderedQueue();
+        refreshSpotifyQueueAfterPlayback();
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     async function playPlaylist(id) {
       // Host route is /api/spotify/play/playlist/{id} (mirrors /play/track/{id}).
       // The widget previously posted to /playlists/{id}/play which 404'd
       // silently — taps did nothing.
-      try { await fetch(HOST + '/api/spotify/play/playlist/' + encodeURIComponent(id), { method: 'POST' }); }
-      catch { /* surfaced by next poll's status */ }
+      try {
+        const r = await fetch(HOST + '/api/spotify/play/playlist/' + encodeURIComponent(id), { method: 'POST' });
+        if (!r.ok) return false;
+        clearRenderedQueue();
+        refreshSpotifyQueueAfterPlayback();
+        return true;
+      } catch {
+        return false;
+      }
     }
 
     // --- Audio source picker --------------------------------------------
@@ -1715,7 +1781,7 @@
       currentView = view;
       // Prime the relevant data so the list isn't blank on first open.
       if (view === 'playlists') pollSpotifyPlaylists();
-      if (view === 'queue') pollSpotifyQueue();
+      if (view === 'queue') pollSpotifyQueue(true);
       if (view === 'audio-source') loadAudioSources();
       // Settings view: reset to the General tab on fresh entry. When
       // backing out of audio-source (where the user came from the
@@ -2122,7 +2188,7 @@
         eqColorBot = EQ_DEFAULT_BOT;
         return;
       }
-      const [h, s] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      const [h, s, l] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
       // Keep the sampled cover mood. The old fixed 0.55 lightness made
       // brown/olive covers look neon; this nudges dark covers into readable
       // territory without flattening every album into the same bright accent.
@@ -2692,16 +2758,11 @@
         currentView === 'playlists' || currentView === 'audio-source');
       rootEl.classList.toggle('settings-mode', currentView === 'settings');
 
-      // Queue button is redundant when the queue is the visible content
-      // (tapping it would toggle to lyrics, but if there are no lyrics
-      // we'd be sent right back here — confusing). Hide it in that case.
-      // Stays visible when on lyrics, playlists, audio-source, or
-      // settings so the user can always jump to queue.
-      const queueIsCenter = showList
-        && currentView !== 'playlists'
-        && currentView !== 'audio-source'
-        && currentView !== 'settings';
-      queueBtn.classList.toggle('hidden', queueIsCenter);
+      // Only hide the queue button for the implicit no-lyrics fallback.
+      // When the user explicitly opens queue, it stays visible as the
+      // toggle back to lyrics.
+      const queueIsImplicitFallback = showList && currentView === 'lyrics';
+      queueBtn.classList.toggle('hidden', queueIsImplicitFallback);
       // Active class mirrors the user's explicit choice, not the
       // effective view — a lyrics-less track's auto-fallback shouldn't
       // light the toggle up.
@@ -2751,8 +2812,9 @@
         frag.appendChild(empty);
       } else {
         for (const t of spotifyQueue) {
-          const row = document.createElement('div');
+          const row = document.createElement('button');
           row.className = 'list-row';
+          row.type = 'button';
           const img = document.createElement('img');
           img.className = 'lr-art';
           img.alt = '';
@@ -2769,6 +2831,12 @@
           meta.appendChild(sub);
           row.appendChild(img);
           row.appendChild(meta);
+          row.addEventListener('click', async () => {
+            if (!t.id) return;
+            if (await playTrack(t.id)) {
+              setView('lyrics');
+            }
+          });
           frag.appendChild(row);
         }
       }
@@ -2830,77 +2898,16 @@
           meta.appendChild(sub);
           row.appendChild(img);
           row.appendChild(meta);
-          row.addEventListener('click', () => {
-            if (pl.id) playPlaylist(pl.id);
-            // Snap back to lyrics/queue so the user sees the track
-            // they just kicked off, not the playlist list.
-            setView('lyrics');
+          row.addEventListener('click', async () => {
+            if (!pl.id) return;
+            if (await playPlaylist(pl.id)) {
+              // Snap back to lyrics/queue so the user sees the track
+              // they just kicked off, not the playlist list.
+              setView('lyrics');
+            }
           });
           frag.appendChild(row);
         }
-      }
-      // Audio source picker entry — always available in the playlists
-      // view (auth-independent — the visualizer needs to work whether or
-      // not Spotify is connected, and the audio capture device is the
-      // user's choice regardless). Tap opens the audio-source sub-view.
-      const sourceRow = document.createElement('button');
-      sourceRow.className = 'list-row';
-      sourceRow.type = 'button';
-      sourceRow.style.marginTop = '8px';
-      sourceRow.style.borderTop = '1px solid rgba(255,255,255,0.08)';
-      sourceRow.style.paddingTop = '12px';
-      const srcIcon = document.createElement('div');
-      srcIcon.className = 'lr-art';
-      srcIcon.style.display = 'flex';
-      srcIcon.style.alignItems = 'center';
-      srcIcon.style.justifyContent = 'center';
-      srcIcon.style.fontSize = '20px';
-      srcIcon.textContent = '🔊';
-      const srcMeta = document.createElement('div');
-      srcMeta.className = 'lr-meta';
-      const srcName = document.createElement('div');
-      srcName.className = 'lr-name';
-      srcName.textContent = 'Equalizer audio source';
-      const srcSub = document.createElement('div');
-      srcSub.className = 'lr-sub';
-      srcSub.textContent = audioSourceActiveName || 'System default';
-      srcMeta.appendChild(srcName);
-      srcMeta.appendChild(srcSub);
-      sourceRow.appendChild(srcIcon);
-      sourceRow.appendChild(srcMeta);
-      sourceRow.addEventListener('click', () => {
-        audioSourceFrom = 'playlists';
-        setView('audio-source');
-      });
-      frag.appendChild(sourceRow);
-
-      // Disconnect lives at the bottom of the playlists list — only
-      // surfaced when the user is intentionally in the auth-affected
-      // view, so it's discoverable without being in the way of the
-      // common case (just tapping a playlist).
-      if (spotifyAuthed) {
-        const disconnect = document.createElement('button');
-        disconnect.className = 'list-row';
-        disconnect.type = 'button';
-        disconnect.style.marginTop = '8px';
-        disconnect.style.opacity = '0.65';
-        const icon = document.createElement('div');
-        icon.className = 'lr-art';
-        icon.style.display = 'flex';
-        icon.style.alignItems = 'center';
-        icon.style.justifyContent = 'center';
-        icon.style.fontSize = '18px';
-        icon.textContent = '⏻';
-        const meta = document.createElement('div');
-        meta.className = 'lr-meta';
-        const name = document.createElement('div');
-        name.className = 'lr-name';
-        name.textContent = 'Disconnect Spotify';
-        meta.appendChild(name);
-        disconnect.appendChild(icon);
-        disconnect.appendChild(meta);
-        disconnect.addEventListener('click', disconnectSpotify);
-        frag.appendChild(disconnect);
       }
       listViewEl.textContent = '';
       listViewEl.appendChild(frag);
@@ -3489,10 +3496,11 @@
         const artist = np.hasSession ? (np.artist || '') : '';
         if (title !== lastTitle) { setText(titleEl, title); lastTitle = title; }
         if (artist !== lastArtist) { setText(artistEl, artist); lastArtist = artist; }
+        lastIsSpotify = !!np.isSpotify && !!np.hasSession;
         // Source line: visible only when Spotify is the SMTC source.
         // (Other sources just don't show this line — title/artist alone is
         // enough for non-Spotify SMTC playback.)
-        setSource(!!np.isSpotify && !!np.hasSession, np.album || '');
+        setSource(lastIsSpotify, np.album || '');
         setArt(!!np.hasArt && !!np.hasSession, np.artVersion ?? 0);
 
         const playing = np.status === 'Playing';
@@ -3552,6 +3560,11 @@
         // now actually playing.
         if (trackChanged && currentView !== 'lyrics') {
           currentView = 'lyrics';
+          applyView();
+        }
+        if (trackChanged && spotifyAuthed && lastIsSpotify) {
+          clearRenderedQueue();
+          pollSpotifyQueue(true);
         }
         if (trackChanged && np.hasSession && artist && title) {
           fetchLyricsFor(artist, title, np.album || '');
