@@ -18,20 +18,30 @@
     }, 1000);
     return () => clearInterval(id);
   });
-  // Album art background: prefer Spotify Web playback art (full size, hi-res
-  // urls), fall back to local SMTC art when no Spotify session. Use truthy
-  // check on the Spotify URL — host returns "" (not null) when there's a
-  // session but no art for the current track.
+  // Album art background follows the same source reconciliation as the
+  // foreground now-playing views. A non-Spotify local SMTC session wins over
+  // Spotify Web API state so a paused YouTube video doesn't randomly inherit
+  // stale Spotify art behind it.
   let albumArtBgUrl = $derived.by(() => {
-    const spotUrl = $appStore.spotifyPlayback?.albumArtUrl;
-    if (spotUrl) return spotUrl;
     const np = $appStore.nowPlaying;
-    if (np?.hasArt) {
+    const playback = $appStore.spotifyPlayback;
+    const smtcHasSession = np?.hasSession ?? false;
+    const smtcIsSpotify = np?.isSpotify ?? false;
+    const smtcActivelyPlaying = smtcHasSession && np?.status === 'Playing';
+    const useSpotifyArt = !!playback?.hasSession
+      && (!smtcHasSession || (smtcIsSpotify && !smtcActivelyPlaying));
+
+    if (useSpotifyArt && playback?.albumArtUrl) return playback.albumArtUrl;
+    if (np?.hasSession && np.hasArt) {
       return `http://127.0.0.1:8976/api/media/album-art?v=${np.artVersion}`;
     }
     return null;
   });
   let showArtBg = $derived(useAlbumArtBg !== false && !!albumArtBgUrl);
+  let artBgSrc = $state<string | null>(null);
+  $effect(() => {
+    if (albumArtBgUrl) artBgSrc = albumArtBgUrl;
+  });
 
   // Bottom Spotify row visible in medium mode whenever Spotify is "the source"
   // somewhere — local SMTC reports Spotify (whether or not authed → Connect
@@ -82,8 +92,8 @@
 
 <main class="root {sizeClass}" class:two-row={!showSpotifyRow} bind:this={rootEl}>
   <div class="bg" aria-hidden="true"></div>
-  {#if showArtBg}
-    <div class="art-bg" aria-hidden="true" style:background-image={`url('${albumArtBgUrl}')`}></div>
+  {#if artBgSrc}
+    <img class="art-bg" class:show={showArtBg} aria-hidden="true" src={artBgSrc} alt="">
   {/if}
 
   {#if !$appStore.connected}
@@ -157,18 +167,25 @@
     z-index: -2;
   }
 
-  /* Album art background — sits between solid color and content. Heavy
-     blur + dim so it doesn't compete with text. */
+  /* Album art background — use an <img> rather than swapping a CSS
+     background-image under a heavy filter; the repo's Edge flicker tests
+     isolated that production combo as the risky rasterization path. */
   .art-bg {
     position: absolute;
     inset: 0;
-    background-size: cover;
-    background-position: center;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
     filter: blur(40px) brightness(0.45) saturate(1.1);
     transform: scale(1.2); /* hide blur edges */
     pointer-events: none;
     z-index: -1;
+    opacity: 0;
     transition: opacity 300ms ease;
+  }
+
+  .art-bg.show {
+    opacity: 1;
   }
 
   .np-row,

@@ -46,11 +46,13 @@ export function registerIcueLifecycle(handlers: IcueLifecycleHandlers): void {
   }
 }
 
+const icuePropertyOverrides = new Map<string, unknown>();
+
 /**
- * Reads a property iCUE injected as a global. Mirrors the safe-access helper
- * from the kit's lifecycle-and-plugins.md reference.
+ * Reads a property iCUE injected as a global, ignoring host-backed overrides.
+ * Use this when watching the actual iCUE panel value for persistence.
  */
-export function getIcueProperty<T = unknown>(name: string): T | undefined {
+export function getRawIcueProperty<T = unknown>(name: string): T | undefined {
   const w = globalThis as Record<string, unknown>;
   if (Object.prototype.hasOwnProperty.call(w, name)) {
     const value = w[name];
@@ -65,6 +67,32 @@ export function getIcueProperty<T = unknown>(name: string): T | undefined {
     /* ignore */
   }
   return undefined;
+}
+
+/**
+ * Host-backed settings can override volatile iCUE globals after a restart.
+ * The active widget still watches raw iCUE values separately so user changes
+ * can be pushed back to the host.
+ */
+export function setIcuePropertyOverrides(values: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined || value === null || value === '') {
+      icuePropertyOverrides.delete(key);
+    } else {
+      icuePropertyOverrides.set(key, value);
+    }
+  }
+}
+
+/**
+ * Reads a property iCUE injected as a global. Host-backed overrides win so
+ * settings restored from the host survive iCUE/widget instance resets.
+ */
+export function getIcueProperty<T = unknown>(name: string): T | undefined {
+  if (icuePropertyOverrides.has(name)) {
+    return icuePropertyOverrides.get(name) as T;
+  }
+  return getRawIcueProperty<T>(name);
 }
 
 /**

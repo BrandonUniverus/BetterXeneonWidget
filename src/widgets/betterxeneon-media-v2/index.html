@@ -206,28 +206,21 @@
       transition: opacity 200ms ease, background-color 200ms ease;
     }
 
-    /* FLICKER TEST: re-introducing the album-art bg layer the way it
-       was in phase 8 — heavy filter chain (blur + brightness + saturate)
-       on an <img> whose src mirrors the foreground album art. If the
-       random flicker on the Edge comes back here, this is confirmed
-       the cause. Always shown (no iCUE option toggle) to isolate the
-       layer itself from the option-pipeline plumbing.
-       The .show class is toggled by setArt based on hasArt — when
-       there's no track, the bg fades out instead of showing a broken
-       image. */
+    /* Album-art background. Keep this on the cheap <img> compositor path:
+       the Edge flicker tests isolated heavy blur/filter chains over album
+       art as the unstable path, especially after playback is paused. */
     .art-bg {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
-      filter: blur(36px) brightness(0.45) saturate(1.15);
       pointer-events: none;
       z-index: -1;
       opacity: 0;
       transition: opacity 350ms ease;
     }
-    .art-bg.show { opacity: var(--art-bg-opacity, 0.95); }
+    .art-bg.show { opacity: var(--art-bg-opacity, 0.22); }
     .root.size-wide {
       flex-direction: row;
       justify-content: flex-start;
@@ -1288,7 +1281,15 @@
     async function loadSettings() {
       try {
         const r = await fetch(HOST + '/api/widget/settings');
-        if (!r.ok) return;
+        if (!r.ok) {
+          if (!_settingsLoaded && !_loadSettingsTimer) {
+            _loadSettingsTimer = setTimeout(() => {
+              _loadSettingsTimer = null;
+              loadSettings();
+            }, 1500);
+          }
+          return;
+        }
         const stored = await r.json();
         for (const key of Object.keys(SETTING_DEFAULTS)) {
           if (key in stored) {
@@ -1299,10 +1300,20 @@
             }
           }
         }
-      } catch { /* offline — defaults already loaded */ }
+        _settingsLoaded = true;
+      } catch {
+        if (!_settingsLoaded && !_loadSettingsTimer) {
+          _loadSettingsTimer = setTimeout(() => {
+            _loadSettingsTimer = null;
+            loadSettings();
+          }, 1500);
+        }
+      }
     }
 
     let _saveTimer = null;
+    let _loadSettingsTimer = null;
+    let _settingsLoaded = false;
     function saveSettings() {
       // Debounce — slider drags fire dozens of updateSetting calls per
       // second. Coalesce to one POST 300ms after the last change.
@@ -1310,12 +1321,15 @@
       _saveTimer = setTimeout(async () => {
         _saveTimer = null;
         try {
-          await fetch(HOST + '/api/widget/settings', {
+          const r = await fetch(HOST + '/api/widget/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(settings),
           });
-        } catch { /* surfaced by next attempt */ }
+          if (!r.ok) setTimeout(saveSettings, 1500);
+        } catch {
+          setTimeout(saveSettings, 1500);
+        }
       }, 300);
     }
 
@@ -1731,7 +1745,8 @@
       if (inFlight[key]) return;
       inFlight[key] = true;
       try {
-        let path = '/api/media/' + kind;
+        const mediaPath = '/api/media/' + kind;
+        let path = mediaPath;
         if (spotifyAuthed && lastIsSpotify) {
           if (kind === 'toggle') {
             path = lastIsPlaying ? '/api/spotify/playback/pause' : '/api/spotify/playback/play';
@@ -1741,7 +1756,15 @@
             path = '/api/spotify/playback/previous';
           }
         }
-        const r = await fetch(HOST + path, { method: 'POST' });
+        let r;
+        try {
+          r = await fetch(HOST + path, { method: 'POST' });
+        } catch {
+          if (path === mediaPath) throw new Error('Media command failed');
+        }
+        if ((!r || !r.ok) && path !== mediaPath) {
+          r = await fetch(HOST + mediaPath, { method: 'POST' });
+        }
         if (r.ok) {
           if (kind === 'next' || kind === 'previous') clearRenderedQueue();
           refreshSpotifyQueueAfterPlayback();

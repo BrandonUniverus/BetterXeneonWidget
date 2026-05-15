@@ -218,6 +218,10 @@ export class HostClient {
     return this.json<Record<string, unknown>>('/api/widget/settings');
   }
 
+  async setWidgetSettings(settings: Record<string, unknown>): Promise<void> {
+    await this.send('/api/widget/settings', settings);
+  }
+
   // ---------- Sessions (apps mixer) ----------
 
   async listSessions(): Promise<AudioSession[]> {

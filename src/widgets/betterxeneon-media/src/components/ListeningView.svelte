@@ -69,11 +69,14 @@
   let deviceName = $derived($appStore.spotifyPlayback?.deviceName ?? '');
 
   // ---------- Transport — local SMTC first, Spotify Web API only for remote -
-  // Same rule as TransportControls. Local SMTC handles play/pause without
-  // hitting Spotify's Web API — no rate limits, no network round-trip. Web
-  // API is only needed when Spotify is playing on a different device.
+  // Same rule as TransportControls. Local SMTC is tried first for actively
+  // playing local Spotify, but Spotify Web API stays available as a fallback
+  // when SMTC goes stale or the rendered source is already Spotify API.
+  let spotifyTransportAvailable = $derived(
+    $appStore.spotifyAuthed && spotifyHasPlayback && (!smtcHasSession || smtcIsSpotify)
+  );
   let useSpotifyTransport = $derived(
-    $appStore.spotifyAuthed && !smtcHasSession && spotifyHasPlayback
+    spotifyTransportAvailable && (!smtcHasSession || (smtcIsSpotify && !smtcActivelyPlaying))
   );
 
   let isPlaying = $derived(
@@ -84,9 +87,9 @@
         : smtcStatus === 'Playing'
   );
 
-  let canPrev = $derived(useSpotifyTransport ? true : ($appStore.nowPlaying?.canGoPrevious ?? false));
-  let canNext = $derived(useSpotifyTransport ? true : ($appStore.nowPlaying?.canGoNext ?? false));
-  let canToggle = $derived(useSpotifyTransport
+  let canPrev = $derived(spotifyTransportAvailable ? true : ($appStore.nowPlaying?.canGoPrevious ?? false));
+  let canNext = $derived(spotifyTransportAvailable ? true : ($appStore.nowPlaying?.canGoNext ?? false));
+  let canToggle = $derived(spotifyTransportAvailable
     ? ($appStore.spotifyPlayback?.hasSession ?? false)
     : (($appStore.nowPlaying?.canPlay ?? false) || ($appStore.nowPlaying?.canPause ?? false)));
 
@@ -106,7 +109,16 @@
     if (prevInFlight) return;
     prevInFlight = true;
     try {
-      if (useSpotifyTransport) await host.spotifyPrevious();
+      const canUseSmtc = smtcHasSession && ($appStore.nowPlaying?.canGoPrevious ?? false);
+      if (!useSpotifyTransport && canUseSmtc) {
+        try {
+          await host.mediaPrevious();
+          return;
+        } catch {
+          if (!spotifyTransportAvailable) throw new Error('SMTC previous failed');
+        }
+      }
+      if (spotifyTransportAvailable) await host.spotifyPrevious();
       else await host.mediaPrevious();
     } catch { /* surfaced via banner */ }
     finally { prevInFlight = false; }
@@ -118,7 +130,17 @@
     toggleInFlight = true;
     setOptimistic(!wasPlaying);
     try {
-      if (useSpotifyTransport) {
+      const canUseSmtc = smtcHasSession
+        && (($appStore.nowPlaying?.canPlay ?? false) || ($appStore.nowPlaying?.canPause ?? false));
+      if (!useSpotifyTransport && canUseSmtc) {
+        try {
+          await host.mediaToggle();
+          return;
+        } catch {
+          if (!spotifyTransportAvailable) throw new Error('SMTC toggle failed');
+        }
+      }
+      if (spotifyTransportAvailable) {
         if (wasPlaying) await host.spotifyPause();
         else await host.spotifyResume();
       } else {
@@ -135,7 +157,16 @@
     if (nextInFlight) return;
     nextInFlight = true;
     try {
-      if (useSpotifyTransport) await host.spotifyNext();
+      const canUseSmtc = smtcHasSession && ($appStore.nowPlaying?.canGoNext ?? false);
+      if (!useSpotifyTransport && canUseSmtc) {
+        try {
+          await host.mediaNext();
+          return;
+        } catch {
+          if (!spotifyTransportAvailable) throw new Error('SMTC next failed');
+        }
+      }
+      if (spotifyTransportAvailable) await host.spotifyNext();
       else await host.mediaNext();
     } catch { /* surfaced via banner */ }
     finally { nextInFlight = false; }
@@ -460,8 +491,10 @@
 </script>
 
 <section class="listening" class:idle class:medium={isMedium}>
-  <div class="art" class:placeholder={!artSrc} style:background-image={artSrc ? `url('${artSrc}')` : 'none'}>
-    {#if !artSrc}
+  <div class="art" class:placeholder={!artSrc}>
+    {#if artSrc}
+      <img class="art-img" src={artSrc} alt="" onerror={() => (imgError = true)}>
+    {:else}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="9"/>
         <circle cx="12" cy="12" r="3"/>
@@ -546,7 +579,7 @@
             <path d="M6 5h2v14H6zM10 12l9-7v14z"/>
           </svg>
         </button>
-        <button class="t-btn center" class:spotify={useSpotifyTransport} type="button" onclick={onToggle} aria-label={isPlaying ? 'Pause' : 'Play'} disabled={!canToggle}>
+        <button class="t-btn center" class:spotify={smtcIsSpotify || useSpotifyTransport} type="button" onclick={onToggle} aria-label={isPlaying ? 'Pause' : 'Play'} disabled={!canToggle}>
           {#if isPlaying}
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <rect x="6" y="5" width="4" height="14" rx="1"/>
@@ -616,19 +649,29 @@
   }
 
   .art {
+    position: relative;
     height: 100%;
     aspect-ratio: 1;
     border-radius: calc(var(--radius) * 1.4);
     background-color: var(--surface);
-    background-size: cover;
-    background-position: center;
     box-shadow: 0 calc(var(--layout-unit) * 1) calc(var(--layout-unit) * 4) rgba(0, 0, 0, 0.45);
     flex-shrink: 0;
     contain: layout style;
+    overflow: hidden;
     display: grid;
     place-items: center;
     color: var(--text-color);
   }
+
+  .art-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
   .art.placeholder { opacity: 0.45; }
   .art svg { width: 35%; height: 35%; }
 

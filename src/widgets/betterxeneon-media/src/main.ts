@@ -4,6 +4,7 @@ import App from './App.svelte';
 import { host } from './api.ts';
 import { refreshInactivityConfig, startInactivityTracker } from './inactivity.ts';
 import { startPolling } from './polling.ts';
+import { startSettingsPersistence } from './settings-persistence.ts';
 import { appStore } from './state.ts';
 import './style.css';
 
@@ -61,6 +62,10 @@ startPolling();
 startInactivityTracker();
 const app = mount(App, { target });
 void loadSystemAccent();
+startSettingsPersistence(() => {
+  applyTheme();
+  refreshInactivityConfig();
+});
 
 registerIcueLifecycle({
   onReady: () => { applyTheme(); refreshInactivityConfig(); },

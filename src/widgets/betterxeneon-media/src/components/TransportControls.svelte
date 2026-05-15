@@ -17,12 +17,18 @@
   // SMTC's Play/Pause works without hitting Spotify's Web API (no rate limit,
   // no network round-trip). Spotify Web API is only needed for true cross-
   // device control (controlling music playing on a phone, etc.), which is the
-  // case when SMTC is silent and Spotify reports a remote session.
+  // case when SMTC is silent, Spotify API is already the rendered source, or
+  // local Spotify's SMTC commands have gone stale after sitting idle.
   let smtcHasSession = $derived($appStore.nowPlaying?.hasSession ?? false);
   let smtcIsSpotify = $derived($appStore.nowPlaying?.isSpotify ?? false);
+  let smtcStatus = $derived($appStore.nowPlaying?.status ?? 'Closed');
+  let smtcActivelyPlaying = $derived(smtcHasSession && smtcStatus === 'Playing');
   let spotifyHasPlayback = $derived($appStore.spotifyPlayback?.hasSession ?? false);
+  let spotifyTransportAvailable = $derived(
+    $appStore.spotifyAuthed && spotifyHasPlayback && (!smtcHasSession || smtcIsSpotify)
+  );
   let useSpotifyTransport = $derived(
-    $appStore.spotifyAuthed && !smtcHasSession && spotifyHasPlayback
+    spotifyTransportAvailable && (!smtcHasSession || (smtcIsSpotify && !smtcActivelyPlaying))
   );
 
   // In-flight guard. Prevents rapid touchscreen tap-spam from queueing a stack
@@ -37,7 +43,16 @@
     if (prevInFlight) return;
     prevInFlight = true;
     try {
-      if (useSpotifyTransport) await host.spotifyPrevious();
+      const canUseSmtc = smtcHasSession && ($appStore.nowPlaying?.canGoPrevious ?? false);
+      if (!useSpotifyTransport && canUseSmtc) {
+        try {
+          await host.mediaPrevious();
+          return;
+        } catch {
+          if (!spotifyTransportAvailable) throw new Error('SMTC previous failed');
+        }
+      }
+      if (spotifyTransportAvailable) await host.spotifyPrevious();
       else await host.mediaPrevious();
     } catch { /* surfaced via banner */ }
     finally { prevInFlight = false; }
@@ -53,7 +68,17 @@
     toggleInFlight = true;
     setOptimistic(!wasPlaying);
     try {
-      if (useSpotifyTransport) {
+      const canUseSmtc = smtcHasSession
+        && (($appStore.nowPlaying?.canPlay ?? false) || ($appStore.nowPlaying?.canPause ?? false));
+      if (!useSpotifyTransport && canUseSmtc) {
+        try {
+          await host.mediaToggle();
+          return;
+        } catch {
+          if (!spotifyTransportAvailable) throw new Error('SMTC toggle failed');
+        }
+      }
+      if (spotifyTransportAvailable) {
         if (wasPlaying) await host.spotifyPause();
         else await host.spotifyResume();
       } else {
@@ -71,7 +96,16 @@
     if (nextInFlight) return;
     nextInFlight = true;
     try {
-      if (useSpotifyTransport) await host.spotifyNext();
+      const canUseSmtc = smtcHasSession && ($appStore.nowPlaying?.canGoNext ?? false);
+      if (!useSpotifyTransport && canUseSmtc) {
+        try {
+          await host.mediaNext();
+          return;
+        } catch {
+          if (!spotifyTransportAvailable) throw new Error('SMTC next failed');
+        }
+      }
+      if (spotifyTransportAvailable) await host.spotifyNext();
       else await host.mediaNext();
     } catch { /* surfaced via banner */ }
     finally { nextInFlight = false; }
@@ -84,20 +118,20 @@
       ? $appStore.optimisticPlay
       : useSpotifyTransport
         ? ($appStore.spotifyPlayback?.isPlaying ?? false)
-        : $appStore.nowPlaying?.status === 'Playing'
+        : smtcStatus === 'Playing'
   );
 
   // Capabilities: when Spotify is the source, assume all transport works
   // (Spotify Web API doesn't expose per-track capability flags). When SMTC,
   // honor the SMTC-reported flags.
-  let canPrev = $derived(useSpotifyTransport ? true : ($appStore.nowPlaying?.canGoPrevious ?? false));
-  let canNext = $derived(useSpotifyTransport ? true : ($appStore.nowPlaying?.canGoNext ?? false));
-  let canToggle = $derived(useSpotifyTransport
+  let canPrev = $derived(spotifyTransportAvailable ? true : ($appStore.nowPlaying?.canGoPrevious ?? false));
+  let canNext = $derived(spotifyTransportAvailable ? true : ($appStore.nowPlaying?.canGoNext ?? false));
+  let canToggle = $derived(spotifyTransportAvailable
     ? ($appStore.spotifyPlayback?.hasSession ?? false)
     : (($appStore.nowPlaying?.canPlay ?? false) || ($appStore.nowPlaying?.canPause ?? false)));
 
   // The central play/pause button uses Spotify green when source is Spotify.
-  let isSpotify = $derived(useSpotifyTransport);
+  let isSpotify = $derived(smtcIsSpotify || useSpotifyTransport);
 </script>
 
 <div class="row" role="toolbar" aria-label="Playback controls">
